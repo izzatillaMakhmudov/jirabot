@@ -1,17 +1,21 @@
-const TelegramBot = require("node-telegram-bot-api");
-const config = require("./config/config");
+import express from 'express'
+import bodyParser from 'body-parser'
 
 
-const bot = new TelegramBot(config.TOKENT, { polling: true })
+const app = express();
+app.use(bodyParser.json())
 
-bot.on("message", async (msg) => {
-    const chatId = msg.chat.id;
 
+
+
+
+
+
+
+
+const PORT = process.env.PORT || 3000
+app.listen(PORT, ()=>{
+    console.log('Listening for jira webhook on port ', PORT)
 })
 
-bot.setMyCommands([
-    { command: '/start', description: 'boshlash' },
-    { command: '/id', description: 'id raqam' },
-    { command: '/help', description: 'yordam olish' },
-])
 
