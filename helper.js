@@ -1,12 +1,20 @@
 const nodemailer = require('nodemailer');
+const https = require('https')
 const TelegramBot = require('node-telegram-bot-api');
 const pool = require('./db')
 const dotenv = require("dotenv");
+const fetch = require('node-fetch')
 dotenv.config();
+// process.env.NODE_TLS_REJECT_UNAUTHORIZED = "0";
 
 const BOT_URL = process.env.BOT_URL;
 
+const httpsAgent = new https.Agent({
+    rejectUnauthorized: false, // <- ignore SSL errors (temporary fix)
+});
 
+const { JIRA_USERNAME, JIRA_PASSWORD, JIRA_BASE_URL } = process.env;
+console.log("👉 Jira Base URL:", JIRA_BASE_URL);
 // admin check
 const ADMIN_IDS = process.env.ADMIN_IDS
 
@@ -22,8 +30,6 @@ if (!TELEGRAM_TOKEN2) {
     console.log('Missing TELEGRAM TOKEN in .env')
     process.exit(1);
 }
-
-
 
 // Load tokens from .env
 const bot1 = new TelegramBot(TELEGRAM_TOKEN1, { polling: false });
@@ -133,8 +139,48 @@ const isAdmin = async (chatId) => {
     }
 };
 
+// Fetch data from jira
+async function getJiraProjects() {
+    const response = await fetch("https://jira.imv.uz/rest/api/2/project", {
+        method: "GET",
+        headers: {
+            Authorization: "Basic " + Buffer.from(`${JIRA_USERNAME}:${JIRA_PASSWORD}`).toString("base64"),
+            "Content-Type": "application/json"
+        },
+        agent: new (require("https").Agent)({ rejectUnauthorized: false }) // ignore SSL cert error
+    });
 
+    if (!response.ok) throw new Error("Failed to fetch Jira projects");
 
+    return await response.json();
+}
+
+async function sendPaginatedProjects(chatId, projects, page) {
+    const pageSize = 10;
+    const start = page * pageSize;
+    const end = start + pageSize;
+    const pageProjects = projects.slice(start, end);
+
+    let messageText = `📁 *Jira Projects* (Page ${page + 1})\n\n`;
+    pageProjects.forEach((p, i) => {
+        messageText += `${i + 1}. ${p.name}\n`;
+    });
+
+    const buttons = pageProjects.map((_, idx) => [
+        { text: `${idx + 1}`, callback_data: `project_detail:${start + idx}` }
+    ]);
+
+    const navigationButtons = [];
+    if (start > 0) navigationButtons.push({ text: "⬅️ Prev", callback_data: `project_page:${page - 1}` });
+    if (end < projects.length) navigationButtons.push({ text: "Next ➡️", callback_data: `project_page:${page + 1}` });
+
+    await sendMessageBot2(chatId, messageText, {
+        parse_mode: "Markdown",
+        reply_markup: {
+            inline_keyboard: [...buttons, navigationButtons.length ? navigationButtons : []]
+        }
+    });
+}
 
 
 
@@ -147,5 +193,7 @@ module.exports = {
     sendMessageBot1,
     sendMessageBot2,
     sendLongMessagebot1,
-    sendLongMessagebot2
+    sendLongMessagebot2,
+    getJiraProjects,
+    sendPaginatedProjects
 };
