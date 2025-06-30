@@ -1,10 +1,20 @@
 const express = require('express');
-const fetch = require('node-fetch');
+// const fetch = require('node-fetch');
 const dotenv = require('dotenv');
 const pool = require("./db");
 const bodyParser = require("body-parser");
-const [sendMessage, isValidEmail, sendVerificationCode, isAdmin, sendLongMessage] = require('./helper')
-const util = require('./utils/utils');
+const {
+    isValidEmail,
+    sendVerificationCode,
+    isAdmin,
+    bot1,
+    bot2,
+    sendMessageBot1,
+    sendMessageBot2,
+    sendLongMessagebot1,
+    sendLongMessagebot2
+} = require('./helper');
+
 
 dotenv.config();
 
@@ -35,136 +45,10 @@ app.get("/users", async (req, res) => {
 
 
 // jira API 
-/*
-app.post("/webhook-jira", async (req, res) => {
-
-    let eventStatus = ''
-
-    const assigneName = req.body?.issue?.fields?.assignee?.displayName;
-    const reporterName = req.body?.issue?.fields?.creator?.displayName
-    const reporterEmail = req.body?.issue?.fields?.creator?.emailAddress
-    const reporterUsername = req.body?.issue?.fields?.creator?.name
-    const assigneUsername = req.body?.issue?.fields?.assignee?.name
-    const assigneEmail = req.body?.issue?.fields?.assignee?.emailAddress
-    const porjectName = req.body?.issue?.fields?.project?.name
-    const issueTypeName = req.body?.issue?.fields?.issuetype?.name
-    const issueTypeDescription = req.body?.issue?.fields?.issuetype?.description
-    const issuePriority = req.body?.issue?.fields?.priority?.name
-    const issueStatus = req.body?.issue?.fields?.status?.name
-    const issueSummary = req.body?.issue?.fields?.summary
-    const issueKey = req.body?.issue?.key
-    const webhookEvent = req.body?.webhookEvent
-    const issueComment = req.body?.comment?.body
-
-    if (webhookEvent === "jira:issue_deleted") {
-        eventStatus = 'deleted'
-    } else if (webhookEvent === "jira:issue_created") {
-        eventStatus = 'created'
-    } else if (webhookEvent === "jira:issue_updated") {
-        eventStatus = 'updated'
-    } else if (webhookEvent === 'comment_created') {
-        eventStatus = 'comment_created'
-    }
-
-    // assigne notification
-    try {
-        const result = await pool.query(`SELECT telegram_id FROM jira_users WHERE email = ($1)`, [assigneEmail])
-
-        try {
-            if (result.rows.length > 0) {
-                const chatId = result.rows[0].telegram_id;
-                sendMessage(chatId, `
-<b>${util[`issue_status_${eventStatus}`]}</b>
-
-<b>👤 Reporter:</b>
-      • <b>Name:</b> ${reporterName}
-      • <b>Username:</b> ${reporterEmail}
-
-<b>👤 Assignee:</b>
-      • <b>Name:</b> ${assigneName}
-      • <b>Username:</b> ${assigneUsername}
-
-<b>🗂 Project: </b> ${porjectName}
-      • <b>🎫 Issue Key:</b> ${issueKey}
-      • <b>📝 Issue Type:</b> ${issueTypeName}
-      • <b>🚨 Priority:</b> ${issuePriority}
-      • <b>📌 Status:</b> ${issueStatus}
-
-<b>📝 Task Name:</b>
-${issueSummary}
-<b>🧾 Description:</b>
-${issueTypeDescription}
-<b>🧾 Comment: </b>
-${issueComment}
-                `, { parse_mode: "HTML" })
-                
-            } else {
-                // No user found
-                console.log('no user found')
-            }
-
-            res.json(result.rows);
-        } catch (err) {
-            console.log(err)
-        }
-
-
-    } catch (err) {
-        console.log(err)
-    }
-
-    // reporter notification
-    try {
-        const result = await pool.query(`SELECT telegram_id FROM jira_users WHERE email = ($1)`, [reporterEmail])
-        try {
-            if (result.rows.length > 0) {
-                const chatId = result.rows[0].telegram_id;
-                sendMessage(chatId, `
-<b>${util[`issue_status_${eventStatus}`]}</b>
-
-<b>👤 Reporter:</b>
-      • <b>Name:</b> ${reporterName}
-      • <b>Username:</b> ${reporterEmail}
-
-<b>👤 Assignee:</b>
-      • <b>Name:</b> ${assigneName}
-      • <b>Username:</b> ${assigneUsername}
-
-<b>🗂 Project: </b> ${porjectName}
-      • <b>🎫 Issue Key:</b> ${issueKey}
-      • <b>📝 Issue Type:</b> ${issueTypeName}
-      • <b>🚨 Priority:</b> ${issuePriority}
-      • <b>📌 Status:</b> ${issueStatus}
-
-<b>📝 Task Name:</b>
-${issueSummary}
-<b>🧾 Description:</b>
-${issueTypeDescription}
-<b>🧾 Comment: </b>
-${issueComment}
-                `, { parse_mode: "HTML" })
-                
-            } else {
-                // No user found
-                console.log('no user found')
-            }
-
-            res.json(result.rows);
-        } catch (err) {
-            console.log(err)
-        }
-
-
-    } catch (err) {
-        console.log(err)
-    }
-})
-*/
-
 
 app.post("/webhook-jira", async (req, res) => {
-    let eventStatus = '';
-
+    const changeLog = req.body?.changelog
+    const issueId = req.body?.issue?.id;
     const assigneName = req.body?.issue?.fields?.assignee?.displayName;
     const reporterName = req.body?.issue?.fields?.creator?.displayName;
     const reporterEmail = req.body?.issue?.fields?.creator?.emailAddress;
@@ -181,18 +65,7 @@ app.post("/webhook-jira", async (req, res) => {
     const webhookEvent = req.body?.webhookEvent;
     const issueComment = req.body?.comment?.body;
 
-    if (webhookEvent === "jira:issue_deleted") {
-        eventStatus = 'deleted';
-    } else if (webhookEvent === "jira:issue_created") {
-        eventStatus = 'created';
-    } else if (webhookEvent === "jira:issue_updated") {
-        eventStatus = 'updated';
-    } else if (webhookEvent === 'comment_created') {
-        eventStatus = 'comment_created';
-    }
-
-    const messageTemplate = `
-<b>${util[`issue_status_${eventStatus}`] || "🔔 New update"}</b>
+    const messageTemplateUser = `
 
 <b>👤 Reporter:</b>
 • <b>Name:</b> ${reporterName}
@@ -201,20 +74,202 @@ app.post("/webhook-jira", async (req, res) => {
 <b>👤 Assignee:</b>
 • <b>Name:</b> ${assigneName}
 • <b>Username:</b> ${assigneUsername}
+    `;
 
+    let messageTemplate = ''
+
+    switch (webhookEvent) {
+        case 'jira:issue_created':
+            {
+                messageTemplate += `<b>🆕 New issue has been created</b>`
+                messageTemplate += messageTemplateUser;
+                messageTemplate += `
 <b>🗂 Project:</b> ${projectName}
-• <b>🎫 Issue Key:</b> ${issueKey}
-• <b>📝 Issue Type:</b> ${issueTypeName}
-• <b>🚨 Priority:</b> ${issuePriority}
-• <b>📌 Status:</b> ${issueStatus}
+    • <b>🎫 Issue Key:</b> ${issueKey}
+    • <b>📝 Issue Type:</b> ${issueTypeName}
+    • <b>🚨 Priority:</b> ${issuePriority}
+    • <b>📌 Status:</b> ${issueStatus}
 
 <b>📝 Task Name:</b>
 ${issueSummary}
 <b>🧾 Description:</b>
 ${issueTypeDescription || "No description."}
-<b>💬 Comment:</b>
-${issueComment || "No comments."}
-`;
+`
+                break;
+            }
+
+        case 'jira:issue_updated':
+            {
+                if (req.body?.issue_event_type_name === 'issue_commented') {
+                    break
+                }
+                messageTemplate += `<b>✏️ Issue has been updated</b>`
+                messageTemplate += `
+
+<b>🗂 Project:</b> ${projectName}
+<b>📝 Task Name:</b>
+${issueSummary}
+`
+                messageTemplate += `<b>
+📝 Modified part:</b>
+`
+                if (changeLog?.items && Array.isArray(changeLog.items)) {
+                    changeLog.items.forEach(item => {
+                        const field = item.field;
+                        const fromString = item.fromString;
+                        const toString = item.toString;
+
+                        messageTemplate += `<b> • ${field}:</b> ${fromString ? `from <i>${fromString}</i> to` : ``} <i>${toString}</i>`
+
+                    });
+                } else {
+                    console.log("No changelog items found.");
+                }
+
+                break
+            }
+
+        case 'jira:issue_deleted':
+            {
+                messageTemplate += `<b>❌ Issue has been deleted</b>`
+                messageTemplate += messageTemplateUser;
+                messageTemplate += `
+<b>🗂 Project:</b> ${projectName}
+    • <b>🎫 Issue Key:</b> ${issueKey}
+
+<b>📝 Task Name:</b> ${issueSummary}
+                `
+                break
+            }
+
+        case 'comment_created':
+            {
+                messageTemplate += `<b>💬 New comment added!</b>`
+                messageTemplate += `
+
+<b>🗂 Project:</b> ${projectName}
+<b>📝 Task Name:</b>
+${issueSummary}
+`
+                messageTemplate += `💬 Comment: ${issueComment}`
+                break
+            }
+
+        case 'comment_updated':
+            {
+                messageTemplate += `<b>✏️ Comment was updated.</b>`
+                messageTemplate += messageTemplateUser;
+                break
+            }
+
+        /*
+    case 'comment_deleted':
+        {
+            messageTemplate += `<b>🗑️ Comment deleted</b>`
+            messageTemplate += messageTemplateUser;
+
+            messageTemplate += `💬 Comment: ${issueComment}`
+            break
+        }*/
+
+        case 'jira:worklog_updated':
+            {
+                messageTemplate += `<b>✏️ Worklog has been updated</b>`
+                messageTemplate += messageTemplateUser;
+                break
+            }
+
+        case 'jira:worklog_deleted':
+            {
+                messageTemplate += `<b>❌ Worklog has been deleted</b>`
+                messageTemplate += messageTemplateUser;
+                break
+            }
+
+        /*
+                case 'issuelink_created':
+                    {
+                        messageTemplate += `<b>🆕 New issue link has been created</b>`
+                        messageTemplate += messageTemplateUser;
+                        break
+                    }
+        
+                case 'issuelink_deleted':
+                    {
+                        messageTemplate += `<b>❌ Issue link has been deleted</b>`
+                        messageTemplate += messageTemplateUser;
+                        break
+                    }
+        */
+
+
+        case 'project_created':
+            {
+                messageTemplate += `<b>🆕 New project has been created</b>`
+                messageTemplate += messageTemplateUser;
+                break
+            }
+
+
+        case 'project_updated':
+            {
+                messageTemplate += `<b>✏️ Project has been updated</b>`
+                messageTemplate += messageTemplateUser;
+                break
+            }
+
+        case 'project_deleted':
+            {
+                messageTemplate += `<b>❌ Project has been deleted</b>`
+                messageTemplate += messageTemplateUser;
+                break
+            }
+
+        case 'board_created':
+            {
+                messageTemplate += `<b>🆕 New board has been created</b>`
+                messageTemplate += messageTemplateUser;
+                break
+            }
+
+        case 'board_updated':
+            {
+                messageTemplate += `<b>✏️ Board has been updated</b>`
+                messageTemplate += messageTemplateUser;
+                break
+            }
+
+        case 'board_deleted':
+            {
+                messageTemplate += `<b>❌ Board has been deleted</b>`
+                messageTemplate += messageTemplateUser;
+                break
+            }
+
+        case 'user_created':
+            {
+                messageTemplate += `<b>🆕 New user has been created</b>`
+                messageTemplate += messageTemplateUser;
+                break
+            }
+
+        case 'user_updated':
+            {
+                messageTemplate += `<b>✏️ User has been updated</b>`
+                messageTemplate += messageTemplateUser;
+
+                break
+            }
+
+        case 'user_deleted':
+            {
+                messageTemplate += `<b>❌ User has been deleted</b>`
+                messageTemplate += messageTemplateUser;
+
+                break
+            }
+
+    }
 
     try {
         // Notify assignee
@@ -224,7 +279,7 @@ ${issueComment || "No comments."}
         );
         if (assigneeResult.rows.length > 0) {
             const chatId = assigneeResult.rows[0].telegram_id;
-            await sendMessage(chatId, messageTemplate, { parse_mode: "HTML" });
+            await sendMessageBot1(chatId, messageTemplate, { parse_mode: "HTML" });
         }
 
         // Notify reporter
@@ -234,7 +289,7 @@ ${issueComment || "No comments."}
         );
         if (reporterResult.rows.length > 0) {
             const chatId = reporterResult.rows[0].telegram_id;
-            await sendMessage(chatId, messageTemplate, { parse_mode: "HTML" });
+            await sendMessageBot1(chatId, messageTemplate, { parse_mode: "HTML" });
         }
 
         return res.status(200).json({ message: "Notifications sent." });
@@ -242,94 +297,55 @@ ${issueComment || "No comments."}
         console.error("Error sending notifications:", err);
         return res.status(500).send("Server error");
     }
+
 });
 
-
-
-// Telegram Api
-/*
-app.post("/webhook", async (req, res) => {
-
+app.post('/jirabotapi', async (req, res) => {
     const body = req.body;
 
     if (!body || !body.message) {
-        console.log("❗ Invalid Telegram payload:", body);
-        return res.sendStatus(400); // Bad Request
+        console.log("❗ Invalid Telegram payload:", body)
+        return res.sendStatus(400);
     }
 
-    const message = req.body.message;
-    if (!message || !message.text) return res.sendStatus(200);
-
+    const message = body.message;
     const chatId = message.chat.id;
+    if (!message.text) return res.sendStatus(200);
     const text = message.text.trim();
 
-    switch (text) {
-        case '/start': {
-            await sendMessage(chatId, `👋 Welcome! This bot is connected to your Jira system.\nPlease register if you are not registered before /register\nIf you want to update your information tap /update`);
-            return res.sendStatus(200);
+    const MainMenuKeyboard = async (chatId) => {
+        const admin = await isAdmin(chatId)
+        if (admin) {
+            return {
+                reply_markup: {
+                    keyboard: [
+                        [{ text: 'Ask for access' }, { text: 'Projects List' }],
+                        [{ text: '📋 Managers List' }, { text: '⚙️ Admin Panel' }],
+                        [{ text: "Add manager" }]
+                    ],
+                    resize_keyboard: true
+                }
+            };
+        } else {
+            return {
+                reply_markup: {
+                    keyboard: [
+                        [{ text: 'Ask for access' }, { text: 'Projects List' }]
+                    ],
+                    resize_keyboard: true
+                }
+            };
         }
 
-        case '/register': {
-            userStates[chatId] = { step: 'awaiting_email', data: {} };
-            await sendMessage(chatId, `📧 Please enter your *Jira email address*:`, { parse_mode: 'Markdown' });
-            return res.sendStatus(200);
-        }
+    };
 
-        case '/update': {
-            userStates[chatId] = { step: 'awaiting_email', data: {} };
-            await sendMessage(chatId, `📧 Please enter your *Jira email address* to update your information:`, { parse_mode: 'Markdown' });
-            return res.sendStatus(200);
-        }
+    if (text === '/start') {
+        await sendMessageBot2(chatId, "Welcome, This bot is connected to your jira software", await MainMenuKeyboard(chatId))
+
+        return res.sendStatus(200)
     }
+})
 
-    if (userStates[chatId]?.step === 'awaiting_email') {
-        if (!isValidEmail(text)) {
-            await sendMessage(chatId, "❌ Invalid email format. Please enter a valid Jira email address.");
-            return res.sendStatus(200);
-        }
-
-        try {
-            const existing = await pool.query("SELECT * FROM jira_users WHERE email = $1", [text]);
-            if (existing.rows.length > 0) {
-                await sendMessage(chatId, "⚠️ This email is already registered. If it’s yours, use /update to change your information.");
-                delete userStates[chatId];
-                return res.sendStatus(200);
-            }
-        } catch (err) {
-            console.error("DB email check error:", err.message);
-            await sendMessage(chatId, "❌ Error checking email in the database.");
-            return res.sendStatus(200);
-        }
-
-        userStates[chatId].data.email = text;
-        userStates[chatId].step = 'awaiting_username';
-        await sendMessage(chatId, `👤 Now enter your *Jira username*:`, { parse_mode: 'Markdown' });
-        return res.sendStatus(200);
-    }
-
-    if (userStates[chatId]?.step === 'awaiting_username') {
-        userStates[chatId].data.username = text;
-        const { email, username } = userStates[chatId].data;
-
-        try {
-            await pool.query(
-                "INSERT INTO jira_users (telegram_id, username, email) VALUES ($1, $2, $3) ON CONFLICT (telegram_id) DO UPDATE SET username = $2, email = $3",
-                [chatId, username, email]
-            );
-            await sendMessage(chatId, `✅ You have been registered!\n📧 Email: ${email}\n👤 Username: ${username}`);
-        } catch (err) {
-            console.log('DB error: ', err);
-            await sendMessage(chatId, '❌ Error saving to database.');
-        }
-
-        delete userStates[chatId];
-        return res.sendStatus(200);
-    }
-
-    // Default response if no condition was met
-    return res.sendStatus(200);
-});
-*/
 
 app.post("/webhook", async (req, res) => {
     const body = req.body;
@@ -340,15 +356,16 @@ app.post("/webhook", async (req, res) => {
         const chatId = callback.message.chat.id;
         const data = callback.data;
 
+
         if (!await isAdmin(chatId)) {
-            await sendMessage(chatId, "🚫 You are not authorized for this action.");
+            await sendMessageBot1(chatId, "🚫 You are not authorized for this action.");
             return res.sendStatus(200);
         }
 
         if (data.startsWith('delete_user:')) {
             const userId = data.split(':')[1];
             await pool.query("DELETE FROM jira_users WHERE id = $1", [userId]);
-            await sendMessage(chatId, `🗑 User deleted.`);
+            await sendMessageBot1(chatId, `🗑 User deleted.`);
             return res.sendStatus(200);
         }
 
@@ -358,9 +375,9 @@ app.post("/webhook", async (req, res) => {
             if (user.rows.length > 0) {
                 const newStatus = !user.rows[0].is_admin;
                 await pool.query("UPDATE jira_users SET is_admin = $1 WHERE id = $2", [newStatus, userId]);
-                await sendMessage(chatId, `🔁 User admin status changed to: ${newStatus ? '✅ Admin' : '❌ Not Admin'}`);
+                await sendMessageBot1(chatId, `🔁 User admin status changed to: ${newStatus ? '✅ Admin' : '❌ Not Admin'}`);
             } else {
-                await sendMessage(chatId, `❗ User not found.`);
+                await sendMessageBot1(chatId, `❗ User not found.`);
             }
             return res.sendStatus(200);
         }
@@ -369,7 +386,7 @@ app.post("/webhook", async (req, res) => {
             const userId = data.split(':')[1];
             const user = await pool.query("SELECT * FROM jira_users WHERE id = $1", [userId]);
             if (user.rows.length === 0) {
-                await sendMessage(chatId, "❗ User not found.");
+                await sendMessageBot1(chatId, "❗ User not found.");
                 return res.sendStatus(200);
             }
 
@@ -383,7 +400,7 @@ app.post("/webhook", async (req, res) => {
                 }
             };
 
-            await sendMessage(chatId, `📧 Current email: ${user.rows[0].email}\nEnter the new email:`);
+            await sendMessageBot1(chatId, `📧 Current email: ${user.rows[0].email}\nEnter the new email:`);
             return res.sendStatus(200);
         }
 
@@ -396,11 +413,14 @@ app.post("/webhook", async (req, res) => {
     const chatId = message.chat.id;
     const text = message.text?.trim();
 
+    // const admin = await isAdmin(chatId)
+    // console.log(admin)
+
     if (!text) return res.sendStatus(200);
 
     // Handle commands
     if (text === '/start') {
-        await sendMessage(chatId, `👋 Welcome! This bot is connected to your Jira system.
+        await sendMessageBot1(chatId, `👋 Welcome! This bot is connected to your Jira system.
 Use /register to sign up or /update to change your information.`);
         return res.sendStatus(200);
     }
@@ -409,12 +429,12 @@ Use /register to sign up or /update to change your information.`);
         const checkUser = await pool.query("SELECT * FROM jira_users WHERE telegram_id = $1", [chatId]);
 
         if (checkUser.rows.length > 0) {
-            await sendMessage(chatId, `⚠️ You are already registered with email: ${checkUser.rows[0].email}\nIf you want to change it, use /update`);
+            await sendMessageBot1(chatId, `⚠️ You are already registered with email: ${checkUser.rows[0].email}\nIf you want to change it, use /update`);
             return res.sendStatus(200);
         }
 
         userStates[chatId] = { step: 'awaiting_email', data: {}, mode: 'register' };
-        await sendMessage(chatId, `📧 Please enter your *Jira email address*:\nType /cancel to abort.`, { parse_mode: 'Markdown' });
+        await sendMessageBot1(chatId, `📧 Please enter your *Jira email address*:\nType /cancel to abort.`, { parse_mode: 'Markdown' });
         return res.sendStatus(200);
     }
 
@@ -422,12 +442,12 @@ Use /register to sign up or /update to change your information.`);
         const checkUser = await pool.query("SELECT * FROM jira_users WHERE telegram_id = $1", [chatId]);
 
         if (checkUser.rows.length === 0) {
-            await sendMessage(chatId, `⚠️ You are not registered yet. Please use /register first.`);
+            await sendMessageBot1(chatId, `⚠️ You are not registered yet. Please use /register first.`);
             return res.sendStatus(200);
         }
 
         userStates[chatId] = { step: 'awaiting_email', data: {}, mode: 'update' };
-        await sendMessage(chatId, `📧 Enter your new *Jira email address* to update:\nType /cancel to abort.`, { parse_mode: 'Markdown' });
+        await sendMessageBot1(chatId, `📧 Enter your new *Jira email address* to update:\nType /cancel to abort.`, { parse_mode: 'Markdown' });
 
         return res.sendStatus(200);
     }
@@ -435,9 +455,9 @@ Use /register to sign up or /update to change your information.`);
     if (text === '/cancel') {
         if (userStates[chatId]) {
             delete userStates[chatId];
-            await sendMessage(chatId, "❌ Operation cancelled.");
+            await sendMessageBot1(chatId, "❌ Operation cancelled.");
         } else {
-            await sendMessage(chatId, "ℹ️ Nothing to cancel.");
+            await sendMessageBot1(chatId, "ℹ️ Nothing to cancel.");
         }
         return res.sendStatus(200);
     }
@@ -446,7 +466,7 @@ Use /register to sign up or /update to change your information.`);
     // Awaiting email
     if (userStates[chatId]?.step === 'awaiting_email') {
         if (!isValidEmail(text)) {
-            await sendMessage(chatId, "❌ Invalid email format. Please enter a valid Jira email.\nType /cancel to abort.");
+            await sendMessageBot1(chatId, "❌ Invalid email format. Please enter a valid Jira email.\nType /cancel to abort.");
             return res.sendStatus(200);
         }
 
@@ -454,13 +474,13 @@ Use /register to sign up or /update to change your information.`);
         const existing = await pool.query("SELECT * FROM jira_users WHERE email = $1", [text]);
 
         if (mode === 'register' && existing.rows.length > 0) {
-            await sendMessage(chatId, "⚠️ This email is already registered. Use /update to change your info.\nType /cancel to abort.");
+            await sendMessageBot1(chatId, "⚠️ This email is already registered. Use /update to change your info.\nType /cancel to abort.");
             delete userStates[chatId];
             return res.sendStatus(200);
         }
 
         if (mode === 'update' && existing.rows.length > 0 && existing.rows[0].telegram_id !== chatId) {
-            await sendMessage(chatId, "⚠️ This email is already used by another user. Please use a different one.");
+            await sendMessageBot1(chatId, "⚠️ This email is already used by another user. Please use a different one.");
             delete userStates[chatId];
             return res.sendStatus(200);
         }
@@ -469,7 +489,7 @@ Use /register to sign up or /update to change your information.`);
         const code = Math.floor(100000 + Math.random() * 900000);
         userStates[chatId].data.verificationCode = code;
         await sendVerificationCode(text, code);
-        await sendMessage(chatId, `📩 A verification code has been sent to your email. Please enter the code:\nType /cancel to abort.`);
+        await sendMessageBot1(chatId, `📩 A verification code has been sent to your email. Please enter the code:\nType /cancel to abort.`);
 
         userStates[chatId].data.email = text;
         userStates[chatId].step = 'awaiting_verification_code';
@@ -479,9 +499,9 @@ Use /register to sign up or /update to change your information.`);
     if (userStates[chatId]?.step === 'awaiting_verification_code') {
         if (text === userStates[chatId].data.verificationCode.toString()) {
             userStates[chatId].step = 'awaiting_username';
-            await sendMessage(chatId, `✅ Verified! Now enter your *Jira username*:`, { parse_mode: 'Markdown' });
+            await sendMessageBot1(chatId, `✅ Verified! Now enter your *Jira username*:`, { parse_mode: 'Markdown' });
         } else {
-            await sendMessage(chatId, "❌ Incorrect code. Please try again.");
+            await sendMessageBot1(chatId, "❌ Incorrect code. Please try again.");
         }
         return res.sendStatus(200);
     }
@@ -501,12 +521,12 @@ Use /register to sign up or /update to change your information.`);
                 [chatId, username, email]
             );
 
-            await sendMessage(chatId,
+            await sendMessageBot1(chatId,
                 `✅ Your info has been ${userStates[chatId].mode === 'register' ? 'registered' : 'updated'}!\n📧 Email: ${email}\n👤 Username: ${username}`
             );
         } catch (err) {
             console.error("DB save error:", err);
-            await sendMessage(chatId, '❌ Error saving to database.');
+            await sendMessageBot1(chatId, '❌ Error saving to database.');
         }
 
         delete userStates[chatId];
@@ -515,16 +535,17 @@ Use /register to sign up or /update to change your information.`);
 
     // show users
     if (text.startsWith('/users')) {
-        if (await isAdmin(chatId)) {
+        const admin = await isAdmin(chatId)
+        if (admin) {
             const users = await pool.query("SELECT id, username, email, is_admin FROM jira_users");
 
             if (users.rows.length === 0) {
-                await sendMessage(chatId, "📭 No registered users.");
+                await sendMessageBot1(chatId, "📭 No registered users.");
                 return res.sendStatus(200);
             }
 
             for (const user of users.rows) {
-                await sendMessage(chatId,
+                await sendMessageBot1(chatId,
                     `👤 *${user.username}*\n📧 ${user.email}\n🛡 Admin: ${user.is_admin ? "✅ Yes" : "❌ No"}`,
                     {
                         parse_mode: 'Markdown',
@@ -544,14 +565,14 @@ Use /register to sign up or /update to change your information.`);
             }
 
         } else {
-            await sendMessage(chatId, "🚫 You are not authorized to use this command.");
+            await sendMessageBot1(chatId, "🚫 You are not authorized to use this command.");
         }
         return res.sendStatus(200);
     }
 
     // Help 
     if (text === '/help') {
-        await sendMessage(chatId, `📌 Available commands:
+        await sendMessageBot1(chatId, `📌 Available commands:
     /start - Welcome message
     /register - Register your Jira info
     /update - Update your info

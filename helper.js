@@ -1,20 +1,38 @@
 const nodemailer = require('nodemailer');
+const TelegramBot = require('node-telegram-bot-api');
+const pool = require('./db')
 const dotenv = require("dotenv");
 dotenv.config();
+
+const BOT_URL = process.env.BOT_URL;
+
 
 // admin check
 const ADMIN_IDS = process.env.ADMIN_IDS
 
 // Telegram connection
-const TELEGRAM_TOKEN = process.env.TELEGRAM_TOKEN;
-if (!TELEGRAM_TOKEN) {
+const TELEGRAM_TOKEN1 = process.env.TELEGRAM_TOKEN_1;
+const TELEGRAM_TOKEN2 = process.env.TELEGRAM_TOKEN_2;
+
+if (!TELEGRAM_TOKEN1) {
     console.log('Missing TELEGRAM TOKEN in .env')
     process.exit(1);
 }
-const TELEGRAM_API = `https://api.telegram.org/bot${TELEGRAM_TOKEN}`;
+if (!TELEGRAM_TOKEN2) {
+    console.log('Missing TELEGRAM TOKEN in .env')
+    process.exit(1);
+}
 
-const sendMessage = async (chatId, text, options = {}) => {
-    await fetch(`${TELEGRAM_API}/sendMessage`, {
+
+
+// Load tokens from .env
+const bot1 = new TelegramBot(TELEGRAM_TOKEN1, { polling: false });
+const bot2 = new TelegramBot(TELEGRAM_TOKEN2, { polling: false });
+bot1.setWebHook(`${BOT_URL}/webhook`);
+bot2.setWebHook(`${BOT_URL}/jirabotapi`);
+
+const sendMessageBot1 = async (chatId, text, options = {}) => {
+    await fetch(`https://api.telegram.org/bot${TELEGRAM_TOKEN1}/sendMessage`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -24,6 +42,32 @@ const sendMessage = async (chatId, text, options = {}) => {
         })
     });
 };
+
+const sendMessageBot2 = async (chatId, text, options = {}) => {
+    await fetch(`https://api.telegram.org/bot${TELEGRAM_TOKEN2}/sendMessage`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+            chat_id: chatId,
+            text,
+            ...options
+        })
+    });
+};
+
+
+const sendLongMessagebot1 = async (chatId, message, chunkSize = 4000) => {
+    for (let i = 0; i < message.length; i += chunkSize) {
+        await sendMessageBot1(chatId, message.substring(i, i + chunkSize));
+    }
+};
+
+const sendLongMessagebot2 = async (chatId, message, chunkSize = 4000) => {
+    for (let i = 0; i < message.length; i += chunkSize) {
+        await sendMessageBot2(chatId, message.substring(i, i + chunkSize));
+    }
+};
+
 
 // email validation
 
@@ -89,18 +133,19 @@ const isAdmin = async (chatId) => {
     }
 };
 
-const sendLongMessage = async (chatId, message, chunkSize = 4000) => {
-    for (let i = 0; i < message.length; i += chunkSize) {
-        await sendMessage(chatId, message.substring(i, i + chunkSize));
-    }
-};
 
 
 
-module.exports = [
-    sendMessage,
+
+
+module.exports = {
     isValidEmail,
     sendVerificationCode,
     isAdmin,
-    sendLongMessage
-];
+    bot1,
+    bot2,
+    sendMessageBot1,
+    sendMessageBot2,
+    sendLongMessagebot1,
+    sendLongMessagebot2
+};
