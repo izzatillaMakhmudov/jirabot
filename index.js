@@ -28,6 +28,7 @@ const userStates = {};
 const emojiNumbers = ['1️⃣', '2️⃣', '3️⃣', '4️⃣', '5️⃣', '6️⃣', '7️⃣', '8️⃣', '9️⃣', '🔟'];
 
 
+
 // for test
 app.get("/", async (req, res) => {
     console.log(req.body)
@@ -52,7 +53,6 @@ app.get("/users", async (req, res) => {
 
 app.post("/webhook-jira", async (req, res) => {
     const changeLog = req.body?.changelog
-    const issueId = req.body?.issue?.id;
     const assigneName = req.body?.issue?.fields?.assignee?.displayName;
     const reporterName = req.body?.issue?.fields?.creator?.displayName;
     const reporterEmail = req.body?.issue?.fields?.creator?.emailAddress;
@@ -159,119 +159,35 @@ ${issueSummary}
                 break
             }
 
-        case 'comment_updated':
-            {
-                messageTemplate += `<b>✏️ Comment was updated.</b>`
-                messageTemplate += messageTemplateUser;
-                break
-            }
+        // case 'comment_updated': { }
 
-        /*
-    case 'comment_deleted':
-        {
-            messageTemplate += `<b>🗑️ Comment deleted</b>`
-            messageTemplate += messageTemplateUser;
+        // case 'comment_deleted': { }
 
-            messageTemplate += `💬 Comment: ${issueComment}`
-            break
-        }*/
+        // case 'jira:worklog_updated': { }
 
-        case 'jira:worklog_updated':
-            {
-                messageTemplate += `<b>✏️ Worklog has been updated</b>`
-                messageTemplate += messageTemplateUser;
-                break
-            }
+        // case 'jira:worklog_deleted': { }
 
-        case 'jira:worklog_deleted':
-            {
-                messageTemplate += `<b>❌ Worklog has been deleted</b>`
-                messageTemplate += messageTemplateUser;
-                break
-            }
+        // case 'issuelink_created': { }
 
-        /*
-                case 'issuelink_created':
-                    {
-                        messageTemplate += `<b>🆕 New issue link has been created</b>`
-                        messageTemplate += messageTemplateUser;
-                        break
-                    }
-        
-                case 'issuelink_deleted':
-                    {
-                        messageTemplate += `<b>❌ Issue link has been deleted</b>`
-                        messageTemplate += messageTemplateUser;
-                        break
-                    }
-        */
+        // case 'issuelink_deleted': { }
 
+        // case 'project_created': { }
 
-        case 'project_created':
-            {
-                messageTemplate += `<b>🆕 New project has been created</b>`
-                messageTemplate += messageTemplateUser;
-                break
-            }
+        // case 'project_updated': { }
 
+        // case 'project_deleted': { }
 
-        case 'project_updated':
-            {
-                messageTemplate += `<b>✏️ Project has been updated</b>`
-                messageTemplate += messageTemplateUser;
-                break
-            }
+        // case 'board_created': { }
 
-        case 'project_deleted':
-            {
-                messageTemplate += `<b>❌ Project has been deleted</b>`
-                messageTemplate += messageTemplateUser;
-                break
-            }
+        // case 'board_updated': { }
 
-        case 'board_created':
-            {
-                messageTemplate += `<b>🆕 New board has been created</b>`
-                messageTemplate += messageTemplateUser;
-                break
-            }
+        // case 'board_deleted': { }
 
-        case 'board_updated':
-            {
-                messageTemplate += `<b>✏️ Board has been updated</b>`
-                messageTemplate += messageTemplateUser;
-                break
-            }
+        // case 'user_created': { }
 
-        case 'board_deleted':
-            {
-                messageTemplate += `<b>❌ Board has been deleted</b>`
-                messageTemplate += messageTemplateUser;
-                break
-            }
+        // case 'user_updated': { }
 
-        case 'user_created':
-            {
-                messageTemplate += `<b>🆕 New user has been created</b>`
-                messageTemplate += messageTemplateUser;
-                break
-            }
-
-        case 'user_updated':
-            {
-                messageTemplate += `<b>✏️ User has been updated</b>`
-                messageTemplate += messageTemplateUser;
-
-                break
-            }
-
-        case 'user_deleted':
-            {
-                messageTemplate += `<b>❌ User has been deleted</b>`
-                messageTemplate += messageTemplateUser;
-
-                break
-            }
+        // case 'user_deleted': { }
 
     }
 
@@ -311,7 +227,7 @@ app.post('/jirabotapi', async (req, res) => {
     const body = req.body;
 
     // Dynamic main menu keyboard
-    const MainMenuKeyboard = async () => {
+    const MainMenuKeyboard = async (chatId) => {
         const admin = await isAdmin(chatId);
         return {
             reply_markup: {
@@ -336,7 +252,13 @@ app.post('/jirabotapi', async (req, res) => {
 
         if (data.startsWith('delete_user:')) {
             const userId = data.split(':')[1];
-            await pool.query("DELETE FROM managers WHERE id = $1", [userId]);
+            try {
+                await pool.query("DELETE FROM managers WHERE id = $1", [userId]);
+            } catch (err) {
+                console.error("DB error:", err);
+                await sendMessageBot2(chatId, "❌ Failed to delete user.");
+            }
+
             await sendMessageBot2(chatId, `🗑 User deleted.`);
             return res.sendStatus(200);
         }
@@ -344,6 +266,7 @@ app.post('/jirabotapi', async (req, res) => {
         if (data.startsWith('edit_user:')) {
             const userId = data.split(':')[1];
             const user = await pool.query("SELECT * FROM managers WHERE id = $1", [userId]);
+
             if (user.rows.length === 0) {
                 await sendMessageBot2(chatId, "❗ Manager not found.");
                 return res.sendStatus(200);
@@ -367,13 +290,15 @@ app.post('/jirabotapi', async (req, res) => {
         }
 
         if (data.startsWith('project_detail:')) {
-            const [_, page, index] = data.split(':').map(Number);
+            const [_, index] = data.split(':').map(Number);
+
             const projects = projectCache[chatId];
-            const project = projects[(page - 1) * 10 + index];
-            if (!project) {
-                await sendMessageBot2(chatId, "⚠️ This project is no longer available.");
+
+            if (!projects || !projects[index]) {
+                await sendMessageBot2(chatId, "⚠️ Project not found or cache expired.");
                 return res.sendStatus(200);
             }
+            const project = projects[index];
 
             if (project) {
                 await sendMessageBot2(chatId,
@@ -389,6 +314,10 @@ app.post('/jirabotapi', async (req, res) => {
         if (data.startsWith('project_page:')) {
             const newPage = Number(data.split(':')[1]);
             const allProjects = projectCache[chatId];
+            if (!allProjects || !Array.isArray(allProjects)) {
+                console.warn(`⚠️ No project data found for chatId: ${chatId}`);
+                return res.sendStatus(200);
+            }
             const total = allProjects.length;
             const pageSize = 10;
             const pageCount = Math.ceil(total / pageSize);
@@ -399,41 +328,45 @@ app.post('/jirabotapi', async (req, res) => {
 
             let messageText = `📋 *Jira Projects List*\nTotal: ${total} | Page: ${newPage}/${pageCount}\n\n`;
             projects.forEach((p, i) => {
-                messageText += `${i + 1}. ${p.name}\n`;
+                const absoluteIndex = (newPage - 1) * pageSize + i + 1;
+                messageText += `${absoluteIndex}. ${p.name}\n`;
             });
 
-            const inlineButtons = projects.map((_, i) => [
-                { text: emojiNumbers[i], callback_data: `project_detail:${newPage}:${i}` }
-            ]);
 
-            // 1. Delete previous message
+            const inlineButtons = [];
+            for (let i = 0; i < projects.length; i += 5) {
+                const row = projects.slice(i, i + 5).map((_, j) => {
+                    const localIndex = i + j;
+                    const globalIndex = (newPage - 1) * pageSize + localIndex;
+                    return {
+                        text: emojiNumbers[localIndex] || `${localIndex + 1}`,
+                        callback_data: `project_detail:${globalIndex}`
+                    };
+                });
+                inlineButtons.push(row);
+            }
+
             try {
                 await bot2.deleteMessage(chatId, callback.message.message_id);
             } catch (err) {
                 console.error("⚠️ Failed to delete previous page message:", err);
             }
 
-            // 2. Send new message
             await sendMessageBot2(chatId, messageText, {
                 parse_mode: 'Markdown',
                 reply_markup: {
                     inline_keyboard: [
-                        inlineButtons.map(b => b[0]),
+                        ...inlineButtons,
                         [
                             ...(newPage > 1 ? [{ text: '⬅️ Prev', callback_data: `project_page:${newPage - 1}` }] : []),
                             ...(newPage < pageCount ? [{ text: '➡️ Next', callback_data: `project_page:${newPage + 1}` }] : [])
                         ]
                     ]
-
                 }
             });
 
             return res.sendStatus(200);
         }
-
-
-
-
 
     }
 
@@ -470,8 +403,6 @@ app.post('/jirabotapi', async (req, res) => {
     }
 
     if (!text) return res.sendStatus(200);
-
-
 
     // Message callback
     if (userStates[chatId]?.step === 'edit_email') {
@@ -621,9 +552,11 @@ app.post('/jirabotapi', async (req, res) => {
 
     // show Projects list
     if (text === '/show_projects_list' || text === 'Projects List') {
-        const page = 1
-        const pageSize = 10
+        const page = 1;
+        const pageSize = 10;
+
         try {
+            // Authorization check
             const result = await pool.query(`SELECT * FROM managers WHERE telegram_chat_id = $1`, [chatId]);
             if (result.rows.length === 0) {
                 await sendMessageBot2(chatId, "📭 You are not authorized to view projects.");
@@ -633,25 +566,39 @@ app.post('/jirabotapi', async (req, res) => {
             const allProjects = await getJiraProjects();
             const total = allProjects.length;
             const pageCount = Math.ceil(total / pageSize);
+            console.log(total, pageCount)
             const projects = allProjects.slice((page - 1) * pageSize, page * pageSize);
 
-            projectCache[chatId] = allProjects; // Store to access later via callback
+            // Cache for navigation
+            projectCache[chatId] = allProjects;
+            setTimeout(() => { delete projectCache[chatId]; }, 5 * 60 * 1000); // 5 min cache
 
+            // Message text
             let messageText = `📋 *Jira Projects List*\nTotal: ${total} | Page: ${page}/${pageCount}\n\n`;
             projects.forEach((p, i) => {
-                messageText += `${i + 1}. ${p.name}\n`;
+                messageText += `${i + 1}. ${p.name}\n`; // 1-10 per page
             });
 
-            const inlineButtons = projects.map((_, i) => [
-                { text: emojiNumbers[i], callback_data: `project_detail:${page}:${i}` }
-            ]);
+            // Inline keyboard (1️⃣ to 🔟 style)
+            const inlineButtons = [];
+            for (let i = 0; i < projects.length; i += 5) {
+                const row = projects.slice(i, i + 5).map((_, j) => {
+                    const localIndex = i + j; // 0–9
+                    const globalIndex = (page - 1) * pageSize + localIndex; // correct index in allProjects
+                    return {
+                        text: emojiNumbers[localIndex] || `${localIndex + 1}`,
+                        callback_data: `project_detail:${globalIndex}`
+                    };
+                });
+                inlineButtons.push(row);
+            }
 
+            // Send paginated message
             await sendMessageBot2(chatId, messageText, {
                 parse_mode: 'Markdown',
                 reply_markup: {
                     inline_keyboard: [
-                        inlineButtons.map(b => b[0]), // One row of emoji buttons
-
+                        ...inlineButtons,
                         [
                             ...(page > 1 ? [{ text: '⬅️ Prev', callback_data: `project_page:${page - 1}` }] : []),
                             ...(page < pageCount ? [{ text: '➡️ Next', callback_data: `project_page:${page + 1}` }] : [])
@@ -660,16 +607,6 @@ app.post('/jirabotapi', async (req, res) => {
                 }
             });
 
-            // const projects = await getJiraProjects();
-            // userProjectPages[chatId] = 0
-            // await sendPaginatedProjects(chatId, projects, 0)
-            // if (!projects) {
-            //     await sendMessageBot2(chatId, "❌ Failed to retrieve Jira projects.");
-            //     return res.sendStatus(200);
-            // }
-
-            // const msg = projects.map(p => `📌 ${p.key}: ${p.name}`).join('\n');
-            // await sendMessageBot2(chatId, `📋 *Jira Projects List:*\n\n${msg}`, { parse_mode: 'Markdown' });
         } catch (err) {
             console.error("❌ Failed to fetch Jira projects:", err);
             await sendMessageBot2(chatId, "❌ Error fetching Jira projects.");
@@ -690,8 +627,6 @@ app.post('/jirabotapi', async (req, res) => {
 
         return res.sendStatus(200);
     }
-
-
 
 
 
