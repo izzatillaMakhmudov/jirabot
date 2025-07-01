@@ -14,7 +14,9 @@ const {
     sendLongMessagebot1,
     sendLongMessagebot2,
     getJiraProjects,
-    sendPaginatedProjects
+    sendPaginatedProjects,
+    getBoardsByProject,
+    getIssuesByBoardId
 } = require('./helper');
 
 
@@ -291,25 +293,62 @@ app.post('/jirabotapi', async (req, res) => {
 
         if (data.startsWith('project_detail:')) {
             const [_, index] = data.split(':').map(Number);
-
             const projects = projectCache[chatId];
 
             if (!projects || !projects[index]) {
                 await sendMessageBot2(chatId, "⚠️ Project not found or cache expired.");
                 return res.sendStatus(200);
             }
+
             const project = projects[index];
 
-            if (project) {
-                await sendMessageBot2(chatId,
-                    `📁 *${project.name}*\nKey: \`${project.key}\`\nID: \`${project.id}\`\nProject Type: ${project.projectTypeKey || 'N/A'}`,
-                    { parse_mode: 'Markdown' }
-                );
-            } else {
-                await sendMessageBot2(chatId, "⚠️ Project not found.");
+            await sendMessageBot2(
+                chatId,
+                `📁 *${project.name}*\nKey: \`${project.key}\`\nID: \`${project.id}\`\nProject Type: ${project.projectTypeKey || 'N/A'}`,
+                { parse_mode: 'Markdown' }
+            );
+
+            try {
+                const boards = await getBoardsByProject(project.id);
+                const boardId = boards.values?.[0]?.id;
+                if (!boardId) {
+                    await sendMessageBot2(chatId, "⚠️ No board found for this project.");
+                    return res.sendStatus(200);
+                }
+
+                const issueData = await getIssuesByBoardId(boardId);
+
+                const issues = issueData.issues.map((issue) => ({
+                    name: issue.fields.summary || '❓ No summary',
+                    status: issue.fields.status?.name || '❓ Unknown',
+                    priority: issue.fields.priority?.name || '❓ None'
+                }));
+
+                if (issues.length === 0) {
+                    await sendMessageBot2(chatId, "📭 No issues found for this project.");
+                } else {
+                    const grouped = {};
+                    for (const issue of issues) {
+                        if (!grouped[issue.status]) grouped[issue.status] = [];
+                        grouped[issue.status].push(`🔹 *${issue.name}* (${issue.priority})`);
+                    }
+
+                    let message = `🗂 *Issues Grouped by Status*\n\n`;
+                    for (const [status, items] of Object.entries(grouped)) {
+                        message += `*${status}*\n${items.join('\n')}\n\n`;
+                    }
+
+                    await sendMessageBot2(chatId, message, { parse_mode: 'Markdown' });
+                }
+
+            } catch (err) {
+                console.error("❌ Error fetching issues:", err);
+                await sendMessageBot2(chatId, "❌ Failed to fetch board or issues.");
             }
+
             return res.sendStatus(200);
         }
+
 
         if (data.startsWith('project_page:')) {
             const newPage = Number(data.split(':')[1]);
@@ -328,8 +367,7 @@ app.post('/jirabotapi', async (req, res) => {
 
             let messageText = `📋 *Jira Projects List*\nTotal: ${total} | Page: ${newPage}/${pageCount}\n\n`;
             projects.forEach((p, i) => {
-                const absoluteIndex = (newPage - 1) * pageSize + i + 1;
-                messageText += `${absoluteIndex}. ${p.name}\n`;
+                messageText += `${i + 1}. ${p.name}\n`;
             });
 
 

@@ -182,6 +182,47 @@ async function sendPaginatedProjects(chatId, projects, page) {
     });
 }
 
+async function getBoardsByProject(projectKeyOrId) {
+    const response = await fetch(`https://jira.imv.uz/rest/agile/1.0/board?projectKeyOrId=${projectKeyOrId}`, {
+        method: "GET",
+        headers: {
+            Authorization: "Basic " + Buffer.from(`${JIRA_USERNAME}:${JIRA_PASSWORD}`).toString("base64"),
+            "Content-Type": "application/json"
+        },
+        agent: new (require("https").Agent)({ rejectUnauthorized: false }) // ignore SSL cert error
+    });
+
+    if (!response.ok) throw new Error("Failed to fetch boards");
+
+    const data = await response.json();
+    return data; // List of boards
+}
+
+async function getIssuesByBoardId(boardId) {
+    const url = `https://jira.imv.uz/rest/agile/1.0/board/${boardId}/issue`;
+    console.log("📡 Fetching:", url);
+    const response = await fetch(url, {
+        method: "GET",
+        headers: {
+            Authorization: "Basic " + Buffer.from(`${JIRA_USERNAME}:${JIRA_PASSWORD}`).toString("base64"),
+            "Content-Type": "application/json"
+        },
+        agent: new (require("https").Agent)({ rejectUnauthorized: false })
+    });
+
+    if (!response.ok) {
+        const errorBody = await response.text();
+        console.error("❌ Status:", response.status);
+        console.error("❌ Body:", errorBody);
+        throw new Error("Failed to fetch Issues");
+    }
+
+    const data = await response.json();
+    return data;
+}
+
+
+
 
 
 module.exports = {
@@ -195,5 +236,7 @@ module.exports = {
     sendLongMessagebot1,
     sendLongMessagebot2,
     getJiraProjects,
-    sendPaginatedProjects
+    sendPaginatedProjects,
+    getBoardsByProject,
+    getIssuesByBoardId
 };
