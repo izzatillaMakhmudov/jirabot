@@ -199,17 +199,24 @@ ${issueSummary}
             `SELECT telegram_id FROM jira_users WHERE email = $1`,
             [assigneEmail]
         );
-        if (assigneeResult.rows.length > 0) {
-            const chatId = assigneeResult.rows[0].telegram_id;
-            await sendMessageBot1(chatId, messageTemplate, { parse_mode: "HTML" });
-        }
+
 
         // Notify reporter
         const reporterResult = await pool.query(
             `SELECT telegram_id FROM jira_users WHERE email = $1`,
             [reporterEmail]
         );
-        if (reporterResult.rows.length > 0) {
+
+        if (assigneeResult.rows[0].telegram_id === reporterResult.rows[0].telegram_id) {
+            await sendMessageBot1(chatId, messageTemplate, { parse_mode: "HTML" });
+        }
+
+        if (assigneeResult.rows.length > 0 && (assigneeResult.rows[0].telegram_id != reporterResult.rows[0].telegram_id)) {
+            const chatId = assigneeResult.rows[0].telegram_id;
+            await sendMessageBot1(chatId, messageTemplate, { parse_mode: "HTML" });
+        }
+
+        if (reporterResult.rows.length > 0 && (assigneeResult.rows[0].telegram_id != reporterResult.rows[0].telegram_id)) {
             const chatId = reporterResult.rows[0].telegram_id;
             await sendMessageBot1(chatId, messageTemplate, { parse_mode: "HTML" });
         }
@@ -291,121 +298,196 @@ app.post('/jirabotapi', async (req, res) => {
             return res.sendStatus(200);
         }
 
-        if (data.startsWith('project_detail:')) {
-            const [_, index] = data.split(':').map(Number);
-            const projects = projectCache[chatId];
+        // if (data.startsWith('project_detail:')) {
+        //     const [_, index] = data.split(':').map(Number);
+        //     const projects = projectCache[chatId];
 
-            if (!projects || !projects[index]) {
-                await sendMessageBot2(chatId, "⚠️ Project not found or cache expired.");
+        //     if (!projects || !projects[index]) {
+        //         await sendMessageBot2(chatId, "⚠️ Project not found or cache expired.");
+        //         return res.sendStatus(200);
+        //     }
+
+        //     const project = projects[index];
+
+        //     await sendMessageBot2(
+        //         chatId,
+        //         `📁 *${project.name}*\nKey: \`${project.key}\`\nID: \`${project.id}\`\nProject Type: ${project.projectTypeKey || 'N/A'}`,
+        //         { parse_mode: 'Markdown' }
+        //     );
+
+        //     try {
+        //         const boards = await getBoardsByProject(project.id);
+        //         const boardId = boards.values?.[0]?.id;
+        //         if (!boardId) {
+        //             console.warn(`⚠️ No boards found for project ID: ${project.id}`);
+        //             await sendMessageBot2(chatId, "⚠️ No board found for this project.");
+        //             return res.sendStatus(200);
+        //         }
+
+        //         const issueData = await getIssuesByBoardId(boardId);
+
+        //         const issues = issueData.issues.map((issue) => ({
+        //             name: issue.fields.summary || '❓ No summary',
+        //             status: issue.fields.status?.name || '❓ Unknown',
+        //             priority: issue.fields.priority?.name || '❓ None'
+        //         }));
+
+        //         if (issues.length === 0) {
+        //             await sendMessageBot2(chatId, "📭 No issues found for this project.");
+        //         } else {
+        //             const grouped = {};
+        //             for (const issue of issues) {
+        //                 if (!grouped[issue.status]) grouped[issue.status] = [];
+        //                 grouped[issue.status].push(`🔹 *${issue.name}* (${issue.priority})`);
+        //             }
+
+        //             let message = `🗂 *Issues Grouped by Status*\n\n`;
+        //             for (const [status, items] of Object.entries(grouped)) {
+        //                 message += `*${status}*\n${items.join('\n')}\n\n`;
+        //             }
+
+        //             await sendMessageBot2(chatId, message, { parse_mode: 'Markdown' });
+        //         }
+
+        //     } catch (err) {
+        //         console.error("❌ Error fetching issues:", err);
+        //         await sendMessageBot2(chatId, "❌ Failed to fetch board or issues.");
+        //     }
+
+        //     return res.sendStatus(200);
+        // }
+
+        if (data.startsWith('project_detail:')) {
+            const idx = parseInt(data.split(':')[1], 10);
+            const all = projectCache[chatId] || [];
+            if (isNaN(idx) || idx < 0 || idx >= all.length) {
+                await sendMessageBot2(chatId, "⚠️ Project not found or expired.");
                 return res.sendStatus(200);
             }
-
-            const project = projects[index];
-
-            await sendMessageBot2(
-                chatId,
-                `📁 *${project.name}*\nKey: \`${project.key}\`\nID: \`${project.id}\`\nProject Type: ${project.projectTypeKey || 'N/A'}`,
-                { parse_mode: 'Markdown' }
-            );
+            const proj = all[idx];
+            await sendMessageBot2(chatId, `📁 *${proj.name}*\nKey: \`${proj.key}\`\nID: \`${proj.id}\``, { parse_mode: 'Markdown' });
 
             try {
-                const boards = await getBoardsByProject(project.id);
+                const boards = await getBoardsByProject(proj.id);
                 const boardId = boards.values?.[0]?.id;
                 if (!boardId) {
-                    await sendMessageBot2(chatId, "⚠️ No board found for this project.");
+                    await sendMessageBot2(chatId, "⚠️ No boards found.");
                     return res.sendStatus(200);
                 }
 
-                const issueData = await getIssuesByBoardId(boardId);
-
-                const issues = issueData.issues.map((issue) => ({
-                    name: issue.fields.summary || '❓ No summary',
-                    status: issue.fields.status?.name || '❓ Unknown',
-                    priority: issue.fields.priority?.name || '❓ None'
+                const data = await getIssuesByBoardId(boardId);
+                const issues = data.issues.map(i => ({
+                    name: i.fields.summary || 'No summary',
+                    status: i.fields.status?.name || 'Unknown',
+                    priority: i.fields.priority?.name || 'None'
                 }));
 
                 if (issues.length === 0) {
-                    await sendMessageBot2(chatId, "📭 No issues found for this project.");
+                    await sendMessageBot2(chatId, "📭 No issues found.");
                 } else {
-                    const grouped = {};
-                    for (const issue of issues) {
-                        if (!grouped[issue.status]) grouped[issue.status] = [];
-                        grouped[issue.status].push(`🔹 *${issue.name}* (${issue.priority})`);
-                    }
+                    const grouped = issues.reduce((g, item) => {
+                        g[item.status] = g[item.status] || [];
+                        g[item.status].push(`🔹 *${item.name}* (${item.priority})`);
+                        return g;
+                    }, {});
 
-                    let message = `🗂 *Issues Grouped by Status*\n\n`;
-                    for (const [status, items] of Object.entries(grouped)) {
-                        message += `*${status}*\n${items.join('\n')}\n\n`;
+                    let msg = `🗂 *Issues by Status*\n\n`;
+                    for (const [status, list] of Object.entries(grouped)) {
+                        msg += `*${status}*\n${list.join('\n')}\n\n`;
                     }
-
-                    await sendMessageBot2(chatId, message, { parse_mode: 'Markdown' });
+                    await sendMessageBot2(chatId, msg, { parse_mode: 'Markdown' });
                 }
-
-            } catch (err) {
-                console.error("❌ Error fetching issues:", err);
-                await sendMessageBot2(chatId, "❌ Failed to fetch board or issues.");
+            } catch (e) {
+                console.error('Error loading issues:', e);
+                await sendMessageBot2(chatId, "❌ Failed to load boards or issues.");
             }
 
             return res.sendStatus(200);
         }
+
+
+        // if (data.startsWith('project_page:')) {
+        //     const newPage = Number(data.split(':')[1]);
+        //     const allProjects = projectCache[chatId];
+        //     if (!allProjects || !Array.isArray(allProjects)) {
+        //         console.warn(`⚠️ No project data found for chatId: ${chatId}`);
+        //         return res.sendStatus(200);
+        //     }
+        //     const total = allProjects.length;
+        //     const pageSize = 10;
+        //     const pageCount = Math.ceil(total / pageSize);
+
+        //     if (newPage < 1 || newPage > pageCount) return res.sendStatus(200);
+
+        //     const projects = allProjects.slice((newPage - 1) * pageSize, newPage * pageSize);
+
+        //     let messageText = `📋 *Jira Projects List*\nTotal: ${total} | Page: ${newPage}/${pageCount}\n\n`;
+        //     projects.forEach((p, i) => {
+        //         messageText += `${i + 1}. ${p.name}\n`;
+        //     });
+
+
+        //     const inlineButtons = [];
+        //     for (let i = 0; i < projects.length; i += 5) {
+        //         const row = projects.slice(i, i + 5).map((_, j) => {
+        //             const localIndex = i + j;
+        //             const globalIndex = (newPage - 1) * pageSize + localIndex;
+        //             return {
+        //                 text: emojiNumbers[localIndex] || `${localIndex + 1}`,
+        //                 callback_data: `project_detail:${globalIndex}`
+        //             };
+        //         });
+        //         inlineButtons.push(row);
+        //     }
+
+        //     try {
+        //         await bot2.deleteMessage(chatId, callback.message.message_id);
+        //     } catch (err) {
+        //         console.error("⚠️ Failed to delete previous page message:", err);
+        //     }
+
+        //     await sendMessageBot2(chatId, messageText, {
+        //         parse_mode: 'Markdown',
+        //         reply_markup: {
+        //             inline_keyboard: [
+        //                 ...inlineButtons,
+        //                 [
+        //                     ...(newPage > 1 ? [{ text: '⬅️ Prev', callback_data: `project_page:${newPage - 1}` }] : []),
+        //                     ...(newPage < pageCount ? [{ text: '➡️ Next', callback_data: `project_page:${newPage + 1}` }] : [])
+        //                 ]
+        //             ]
+        //         }
+        //     });
+
+        //     return res.sendStatus(200);
+        // }
 
 
         if (data.startsWith('project_page:')) {
-            const newPage = Number(data.split(':')[1]);
-            const allProjects = projectCache[chatId];
-            if (!allProjects || !Array.isArray(allProjects)) {
-                console.warn(`⚠️ No project data found for chatId: ${chatId}`);
-                return res.sendStatus(200);
+            const page = parseInt(data.split(':')[1], 10);
+            const all = projectCache[chatId] || [];
+            const total = all.length, size = 10, pages = Math.ceil(total / size);
+            if (isNaN(page) || page < 1 || page > pages) return res.sendStatus(200);
+
+            const subset = all.slice((page - 1) * size, page * size);
+            const text = [`📋 *Jira Projects (${page}/${pages})*`, ...subset.map((p, i) => `${i + 1}. ${p.name}`)].join('\n');
+
+            const keyboard = [];
+            for (let i = 0; i < subset.length; i += 5) {
+                keyboard.push(subset.slice(i, i + 5).map((_, j) => {
+                    const li = i + j;
+                    return { text: emojiNumbers[li], callback_data: `project_detail:${(page - 1) * size + li}` };
+                }));
             }
-            const total = allProjects.length;
-            const pageSize = 10;
-            const pageCount = Math.ceil(total / pageSize);
+            keyboard.push([
+                ...(page > 1 ? [{ text: '⬅️', callback_data: `project_page:${page - 1}` }] : []),
+                ...(page < pages ? [{ text: '➡️', callback_data: `project_page:${page + 1}` }] : [])
+            ]);
 
-            if (newPage < 1 || newPage > pageCount) return res.sendStatus(200);
-
-            const projects = allProjects.slice((newPage - 1) * pageSize, newPage * pageSize);
-
-            let messageText = `📋 *Jira Projects List*\nTotal: ${total} | Page: ${newPage}/${pageCount}\n\n`;
-            projects.forEach((p, i) => {
-                messageText += `${i + 1}. ${p.name}\n`;
-            });
-
-
-            const inlineButtons = [];
-            for (let i = 0; i < projects.length; i += 5) {
-                const row = projects.slice(i, i + 5).map((_, j) => {
-                    const localIndex = i + j;
-                    const globalIndex = (newPage - 1) * pageSize + localIndex;
-                    return {
-                        text: emojiNumbers[localIndex] || `${localIndex + 1}`,
-                        callback_data: `project_detail:${globalIndex}`
-                    };
-                });
-                inlineButtons.push(row);
-            }
-
-            try {
-                await bot2.deleteMessage(chatId, callback.message.message_id);
-            } catch (err) {
-                console.error("⚠️ Failed to delete previous page message:", err);
-            }
-
-            await sendMessageBot2(chatId, messageText, {
-                parse_mode: 'Markdown',
-                reply_markup: {
-                    inline_keyboard: [
-                        ...inlineButtons,
-                        [
-                            ...(newPage > 1 ? [{ text: '⬅️ Prev', callback_data: `project_page:${newPage - 1}` }] : []),
-                            ...(newPage < pageCount ? [{ text: '➡️ Next', callback_data: `project_page:${newPage + 1}` }] : [])
-                        ]
-                    ]
-                }
-            });
-
+            await bot2.deleteMessage(chatId, callback.message.message_id).catch(() => { });
+            await sendMessageBot2(chatId, text, { reply_markup: { inline_keyboard: keyboard }, parse_mode: 'Markdown' });
             return res.sendStatus(200);
         }
-
     }
 
     if (!body || !body.message) {
@@ -589,65 +671,120 @@ app.post('/jirabotapi', async (req, res) => {
     }
 
     // show Projects list
-    if (text === '/show_projects_list' || text === 'Projects List') {
-        const page = 1;
-        const pageSize = 10;
+    // if (text === '/show_projects_list' || text === 'Projects List') {
+    //     const page = 1;
+    //     const pageSize = 10;
 
+    //     try {
+    //         // Authorization check
+    //         const result = await pool.query(`SELECT * FROM managers WHERE telegram_chat_id = $1`, [chatId]);
+    //         if (result.rows.length === 0) {
+    //             await sendMessageBot2(chatId, "📭 You are not authorized to view projects.");
+    //             return res.sendStatus(200);
+    //         }
+
+
+
+    //         const allProjects = await getJiraProjects();
+    //         const total = allProjects.length;
+    //         const pageCount = Math.ceil(total / pageSize);
+    //         console.log(total, pageCount)
+    //         const projects = allProjects.slice((page - 1) * pageSize, page * pageSize);
+
+    //         // Cache for navigation
+    //         projectCache[chatId] = allProjects;
+    //         setTimeout(() => { delete projectCache[chatId]; }, 5 * 60 * 1000); // 5 min cache
+
+    //         // Message text
+    //         let messageText = `📋 *Jira Projects List*\nTotal: ${total} | Page: ${page}/${pageCount}\n\n`;
+    //         projects.forEach((p, i) => {
+    //             messageText += `${i + 1}. ${p.name}\n`; // 1-10 per page
+    //         });
+
+    //         // Inline keyboard (1️⃣ to 🔟 style)
+    //         const inlineButtons = [];
+    //         for (let i = 0; i < projects.length; i += 5) {
+    //             const row = projects.slice(i, i + 5).map((_, j) => {
+    //                 const localIndex = i + j; // 0–9
+    //                 const globalIndex = (page - 1) * pageSize + localIndex; // correct index in allProjects
+    //                 return {
+    //                     text: emojiNumbers[localIndex] || `${localIndex + 1}`,
+    //                     callback_data: `project_detail:${globalIndex}`
+    //                 };
+    //             });
+    //             inlineButtons.push(row);
+    //         }
+
+    //         // Send paginated message
+    //         await sendMessageBot2(chatId, messageText, {
+    //             parse_mode: 'Markdown',
+    //             reply_markup: {
+    //                 inline_keyboard: [
+    //                     ...inlineButtons,
+    //                     [
+    //                         ...(page > 1 ? [{ text: '⬅️ Prev', callback_data: `project_page:${page - 1}` }] : []),
+    //                         ...(page < pageCount ? [{ text: '➡️ Next', callback_data: `project_page:${page + 1}` }] : [])
+    //                     ]
+    //                 ]
+    //             }
+    //         });
+
+    //     } catch (err) {
+    //         console.error("❌ Failed to fetch Jira projects:", err);
+    //         await sendMessageBot2(chatId, "❌ Error fetching Jira projects.");
+    //     }
+
+    //     return res.sendStatus(200);
+    // }
+
+    if (text === '/show_projects_list' || text === 'Projects List') {
         try {
-            // Authorization check
-            const result = await pool.query(`SELECT * FROM managers WHERE telegram_chat_id = $1`, [chatId]);
-            if (result.rows.length === 0) {
-                await sendMessageBot2(chatId, "📭 You are not authorized to view projects.");
+            const all = await getJiraProjects(); // Fetch all Jira projects
+            if (!Array.isArray(all) || all.length === 0) {
+                await sendMessageBot2(chatId, "⚠️ No projects found.");
                 return res.sendStatus(200);
             }
 
-            const allProjects = await getJiraProjects();
-            const total = allProjects.length;
-            const pageCount = Math.ceil(total / pageSize);
-            console.log(total, pageCount)
-            const projects = allProjects.slice((page - 1) * pageSize, page * pageSize);
+            // Cache for callback pagination
+            projectCache[chatId] = all;
+            setTimeout(() => delete projectCache[chatId], 5 * 60 * 1000); // 5 minutes
 
-            // Cache for navigation
-            projectCache[chatId] = allProjects;
-            setTimeout(() => { delete projectCache[chatId]; }, 5 * 60 * 1000); // 5 min cache
+            const page = 1;
+            const size = 10;
+            const totalPages = Math.ceil(all.length / size);
+            const subset = all.slice(0, size); // First 10
 
-            // Message text
-            let messageText = `📋 *Jira Projects List*\nTotal: ${total} | Page: ${page}/${pageCount}\n\n`;
-            projects.forEach((p, i) => {
-                messageText += `${i + 1}. ${p.name}\n`; // 1-10 per page
-            });
+            // Create message text
+            const textMsg = [
+                `📋 *Jira Projects (${page}/${totalPages})*`,
+                ...subset.map((p, i) => `${i + 1}. ${p.name}`)
+            ].join('\n');
 
-            // Inline keyboard (1️⃣ to 🔟 style)
-            const inlineButtons = [];
-            for (let i = 0; i < projects.length; i += 5) {
-                const row = projects.slice(i, i + 5).map((_, j) => {
-                    const localIndex = i + j; // 0–9
-                    const globalIndex = (page - 1) * pageSize + localIndex; // correct index in allProjects
-                    return {
-                        text: emojiNumbers[localIndex] || `${localIndex + 1}`,
-                        callback_data: `project_detail:${globalIndex}`
-                    };
-                });
-                inlineButtons.push(row);
+            // Inline keyboard
+            const keyboard = [];
+            for (let i = 0; i < subset.length; i += 5) {
+                keyboard.push(
+                    subset.slice(i, i + 5).map((_, j) => ({
+                        text: emojiNumbers[i + j],
+                        callback_data: `project_detail:${(page - 1) * size + i + j}`,
+                    }))
+                );
             }
 
-            // Send paginated message
-            await sendMessageBot2(chatId, messageText, {
+            // Add pagination button if needed
+            if (totalPages > 1) {
+                keyboard.push([{ text: '➡️', callback_data: `project_page:${page + 1}` }]);
+            }
+
+            // Send message
+            await sendMessageBot2(chatId, textMsg, {
                 parse_mode: 'Markdown',
-                reply_markup: {
-                    inline_keyboard: [
-                        ...inlineButtons,
-                        [
-                            ...(page > 1 ? [{ text: '⬅️ Prev', callback_data: `project_page:${page - 1}` }] : []),
-                            ...(page < pageCount ? [{ text: '➡️ Next', callback_data: `project_page:${page + 1}` }] : [])
-                        ]
-                    ]
-                }
+                reply_markup: { inline_keyboard: keyboard },
             });
 
         } catch (err) {
-            console.error("❌ Failed to fetch Jira projects:", err);
-            await sendMessageBot2(chatId, "❌ Error fetching Jira projects.");
+            console.error('Error in /show_projects_list:', err);
+            await sendMessageBot2(chatId, '❌ Failed to load projects from Jira.');
         }
 
         return res.sendStatus(200);
