@@ -34,50 +34,9 @@ if (!TELEGRAM_TOKEN2) {
 // Load tokens from .env
 const bot1 = new TelegramBot(TELEGRAM_TOKEN1, { polling: true });
 const bot2 = new TelegramBot(TELEGRAM_TOKEN2, { polling: true });
-// bot1.setWebHook(`${BOT_URL}/webhook`);
-// bot2.setWebHook(`${BOT_URL}/jirabotapi`);
-
-// const sendMessageBot1 = async (chatId, text, options = {}) => {
-//     await fetch(`https://api.telegram.org/bot${TELEGRAM_TOKEN1}/sendMessage`, {
-//         method: "POST",
-//         headers: { "Content-Type": "application/json" },
-//         body: JSON.stringify({
-//             chat_id: chatId,
-//             text,
-//             ...options
-//         })
-//     });
-// };
-
-// const sendMessageBot2 = async (chatId, text, options = {}) => {
-//     await fetch(`https://api.telegram.org/bot${TELEGRAM_TOKEN2}/sendMessage`, {
-//         method: "POST",
-//         headers: { "Content-Type": "application/json" },
-//         body: JSON.stringify({
-//             chat_id: chatId,
-//             text,
-//             ...options
-//         })
-//     });
-// };
 
 const sendMessageBot1 = (chatId, text, options = {}) => bot1.sendMessage(chatId, text, options);
 const sendMessageBot2 = (chatId, text, options = {}) => bot2.sendMessage(chatId, text, options);
-
-
-const sendLongMessagebot1 = async (chatId, message, chunkSize = 4000) => {
-    for (let i = 0; i < message.length; i += chunkSize) {
-        await sendMessageBot1(chatId, message.substring(i, i + chunkSize));
-    }
-};
-
-
-const sendLongMessagebot2 = async (chatId, message, chunkSize = 4000) => {
-    for (let i = 0; i < message.length; i += chunkSize) {
-        await sendMessageBot2(chatId, message.substring(i, i + chunkSize));
-    }
-};
-
 
 // email validation
 
