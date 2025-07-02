@@ -1,5 +1,4 @@
 const express = require('express');
-// const fetch = require('node-fetch');
 const dotenv = require('dotenv');
 const pool = require("./db");
 const bodyParser = require("body-parser");
@@ -11,10 +10,7 @@ const {
     bot2,
     sendMessageBot1,
     sendMessageBot2,
-    sendLongMessagebot1,
-    sendLongMessagebot2,
     getJiraProjects,
-    sendPaginatedProjects,
     getBoardsByProject,
     getIssuesByBoardId
 } = require('./helper');
@@ -25,6 +21,8 @@ dotenv.config();
 const app = express();
 app.use(bodyParser.json())
 
+// States
+const userPages = {}
 const projectCache = {};
 const userStates = {};
 const emojiNumbers = ['1️⃣', '2️⃣', '3️⃣', '4️⃣', '5️⃣', '6️⃣', '7️⃣', '8️⃣', '9️⃣', '🔟'];
@@ -234,13 +232,16 @@ ${issueSummary}
 });
 
 
-// Second bot 
+// ============= Managers bot =============
 
-app.post('/jirabotapi', async (req, res) => {
-    const body = req.body;
+bot2.on('message', async (msg) => {
+    const chatId = msg.chat.id;
+    const text = msg.text?.trim();
+    const contact = msg.contact;
 
-    // Dynamic main menu keyboard
-    const MainMenuKeyboard = async (chatId) => {
+    const sendMessage = (text, options = {}) => bot2.sendMessage(chatId, text, options);
+
+    const MainMenuKeyboard = async () => {
         const admin = await isAdmin(chatId);
         return {
             reply_markup: {
@@ -258,136 +259,15 @@ app.post('/jirabotapi', async (req, res) => {
         };
     };
 
-    if (body.callback_query) {
-        const callback = body.callback_query;
-        const chatId = callback.message.chat.id;
-        const data = callback.data;
-
-        if (data.startsWith('delete_user:')) {
-            const userId = data.split(':')[1];
-            try {
-                await pool.query("DELETE FROM managers WHERE id = $1", [userId]);
-            } catch (err) {
-                console.error("DB error:", err);
-                await sendMessageBot2(chatId, "❌ Failed to delete user.");
-            }
-
-            await sendMessageBot2(chatId, `🗑 User deleted.`);
-            return res.sendStatus(200);
-        }
-
-        if (data.startsWith('edit_user:')) {
-            const userId = data.split(':')[1];
-            const user = await pool.query("SELECT * FROM managers WHERE id = $1", [userId]);
-
-            if (user.rows.length === 0) {
-                await sendMessageBot2(chatId, "❗ Manager not found.");
-                return res.sendStatus(200);
-            }
-
-            userStates[chatId] = {
-                step: 'edit_email',
-                mode: 'edit',
-                data: {
-                    id: userId,
-                    phone: user.rows[0].phone_number,
-                    email: user.rows[0].jira_email
-                }
-            };
-
-            await sendMessageBot2(
-                chatId,
-                `📧 Current Jira email: ${user.rows[0].jira_email || "❌ Not registered"}\nPlease enter the new Jira email:`
-            );
-            return res.sendStatus(200);
-        }
-
-        if (data.startsWith('project_detail:')) {
-            const idx = parseInt(data.split(':')[1], 10);
-            const all = projectCache[chatId] || [];
-            if (isNaN(idx) || idx < 0 || idx >= all.length) {
-                await sendMessageBot2(chatId, "⚠️ Project not found or expired.");
-                return res.sendStatus(200);
-            }
-            const proj = all[idx];
-            await sendMessageBot2(chatId, `📁 *${proj.name}*\nKey: \`${proj.key}\`\nID: \`${proj.id}\``, { parse_mode: 'Markdown' });
-
-            try {
-                const boards = await getBoardsByProject(proj.id);
-                const boardId = boards.values?.[0]?.id;
-                if (!boardId) {
-                    await sendMessageBot2(chatId, "⚠️ No boards found.");
-                    return res.sendStatus(200);
-                }
-
-                const data = await getIssuesByBoardId(boardId);
-                const issues = data.issues.map(i => ({
-                    name: i.fields.summary || 'No summary',
-                    status: i.fields.status?.name || 'Unknown',
-                    priority: i.fields.priority?.name || 'None'
-                }));
-
-                if (issues.length === 0) {
-                    await sendMessageBot2(chatId, "📭 No issues found.");
-                } else {
-                    const grouped = issues.reduce((g, item) => {
-                        g[item.status] = g[item.status] || [];
-                        g[item.status].push(`🔹 *${item.name}* (${item.priority})`);
-                        return g;
-                    }, {});
-
-                    let msg = `🗂 *Issues by Status*\n\n`;
-                    for (const [status, list] of Object.entries(grouped)) {
-                        msg += `*${status}*\n${list.join('\n')}\n\n`;
-                    }
-                    await sendMessageBot2(chatId, msg, { parse_mode: 'Markdown' });
-                }
-            } catch (e) {
-                console.error('Error loading issues:', e);
-                await sendMessageBot2(chatId, "❌ Failed to load boards or issues.");
-            }
-
-            return res.sendStatus(200);
-        }
-
-        if (data.startsWith('project_page:')) {
-            const page = parseInt(data.split(':')[1], 10);
-            const all = projectCache[chatId] || [];
-            const total = all.length, size = 10, pages = Math.ceil(total / size);
-            if (isNaN(page) || page < 1 || page > pages) return res.sendStatus(200);
-
-            const subset = all.slice((page - 1) * size, page * size);
-            const text = [`📋 *Jira Projects (${page}/${pages})*`, ...subset.map((p, i) => `${i + 1}. ${p.name}`)].join('\n');
-
-            const keyboard = [];
-            for (let i = 0; i < subset.length; i += 5) {
-                keyboard.push(subset.slice(i, i + 5).map((_, j) => {
-                    const li = i + j;
-                    return { text: emojiNumbers[li], callback_data: `project_detail:${(page - 1) * size + li}` };
-                }));
-            }
-            keyboard.push([
-                ...(page > 1 ? [{ text: '⬅️', callback_data: `project_page:${page - 1}` }] : []),
-                ...(page < pages ? [{ text: '➡️', callback_data: `project_page:${page + 1}` }] : [])
-            ]);
-
-            await bot2.deleteMessage(chatId, callback.message.message_id).catch(() => { });
-            await sendMessageBot2(chatId, text, { reply_markup: { inline_keyboard: keyboard }, parse_mode: 'Markdown' });
-            return res.sendStatus(200);
-        }
+    // Cancel handler
+    if (text === '/cancel') {
+        delete userStates[chatId];
+        await sendMessage("❌ Cancelled. Back to main menu.", await MainMenuKeyboard());
     }
 
-    if (!body || !body.message) {
-        console.log("❗ Invalid Telegram payload:", body);
-        return res.sendStatus(400);
-    }
-
-    const message = body.message;
-    const chatId = message.chat.id;
-    const text = message.text?.trim();
-    if (message.contact) {
-        const phone = '+' + message.contact.phone_number;
-
+    // Contact handler
+    if (contact) {
+        const phone = '+' + contact.phone_number;
         try {
             const result = await pool.query(
                 `UPDATE managers SET telegram_chat_id = $1 WHERE phone_number = $2`,
@@ -395,112 +275,59 @@ app.post('/jirabotapi', async (req, res) => {
             );
 
             if (result.rowCount === 0) {
-                // No such phone exists in DB, optionally insert or notify
-                await sendMessageBot2(chatId, `⚠️ Your phone number is not recognized. Please ask an admin to register you.`, await MainMenuKeyboard());
+                await sendMessage(`⚠️ Your phone number is not recognized. Please ask an admin to register you.`, await MainMenuKeyboard());
             } else {
-                await sendMessageBot2(chatId, `✅ Thank you! You’ve been granted access.`, await MainMenuKeyboard());
+                await sendMessage(`✅ Thank you! You’ve been granted access.`, await MainMenuKeyboard());
             }
-
         } catch (err) {
             console.error("❌ Error updating Telegram ID:", err);
-            await sendMessageBot2(chatId, "❌ Failed to link your phone number. Please try again later.");
+            await sendMessage("❌ Failed to link your phone number. Please try again later.");
         }
-
-        return res.sendStatus(200);
+        return;
     }
 
-    if (!text) return res.sendStatus(200);
-
-    // Message callback
-    if (userStates[chatId]?.step === 'edit_email') {
-        const newEmail = text;
-
-        if (!isValidEmail(newEmail)) {
-            await sendMessageBot2(chatId, "❌ Invalid email. Please enter a valid email address.");
-            return res.sendStatus(200);
-        }
-
-        // Save email and move to phone number step
-        userStates[chatId].data.email = newEmail;
-        userStates[chatId].step = 'edit_phone';
-
-        await sendMessageBot2(chatId, "📱 Now enter the new *phone number* for this manager:", { parse_mode: 'Markdown' });
-        return res.sendStatus(200);
-    }
-
-    if (userStates[chatId]?.step === 'edit_phone') {
-        const newPhone = text;
-
-        if (!/^\+?\d{7,15}$/.test(newPhone)) {
-            await sendMessageBot2(chatId, "❗ Invalid phone number. Please enter a valid one (e.g., +998901234567):");
-            return res.sendStatus(200);
-        }
-
-        const { id, email } = userStates[chatId].data;
-
-        try {
-            await pool.query(
-                `UPDATE managers SET phone_number = $1, jira_email = $2 WHERE id = $3`,
-                [newPhone, email, id]
-            );
-
-            await sendMessageBot2(chatId, "✅ Manager info updated successfully!");
-        } catch (err) {
-            console.error("DB update error:", err);
-            await sendMessageBot2(chatId, "❌ Failed to update manager info.");
-        }
-
-        delete userStates[chatId];
-        return res.sendStatus(200);
-    }
-
-
-    // START command
+    // Start
     if (text === '/start') {
-        await sendMessageBot2(chatId, "👋 Welcome! This bot is connected to your Jira software.", await MainMenuKeyboard());
-        return res.sendStatus(200);
+        await sendMessage("👋 Welcome! This bot is connected to your Jira software.", await MainMenuKeyboard());
+        return;
     }
 
-    // Add manager (ask for phone)
-    if (text === '/add-manager' || text === 'Add manager') {
+    // Add manager
+    if (text === 'Add manager' || text === '/add_manager') {
         userStates[chatId] = { step: 'awaiting_managers_phone' };
-        await sendMessageBot2(chatId, "📱 Please enter the manager’s *phone number*:", {
+        await sendMessage("📱 Please enter the manager’s *phone number*:", {
             parse_mode: 'Markdown',
             reply_markup: {
-                keyboard: [
-                    [{ text: '/cancel' }]
-                ],
+                keyboard: [[{ text: '/cancel' }]],
                 resize_keyboard: true,
                 one_time_keyboard: true
             }
         });
-        return res.sendStatus(200);
+        return;
     }
 
-    // Awaiting phone input
     if (userStates[chatId]?.step === 'awaiting_managers_phone') {
         const phoneNumber = text;
-
-        // Optional: Validate phone number format
         if (!/^\+?\d{7,15}$/.test(phoneNumber)) {
-            await sendMessageBot2(chatId, "❗ Invalid phone number. Please enter a valid one (e.g., +998901234567):");
-            return res.sendStatus(200);
+            await sendMessage("❗ Invalid phone number. Please enter a valid one (e.g., +998901234567):");
+            return;
         }
 
         try {
             await pool.query(`INSERT INTO managers (phone_number) VALUES ($1)`, [phoneNumber]);
-            await sendMessageBot2(chatId, "✅ Phone number has been saved to the database.");
+            await sendMessage("✅ Phone number has been saved to the database.", await MainMenuKeyboard(chatId));
         } catch (err) {
             console.error("DB save error:", err);
-            await sendMessageBot2(chatId, "❌ Error saving to the database.");
+            await sendMessage("❌ Error saving to the database.");
         }
 
         delete userStates[chatId];
-        return res.sendStatus(200);
+        return;
     }
 
-    if (text === '/managers-list' || text === '📋 Managers List') {
-        const admin = await isAdmin(chatId)
+    // Managers list
+    if (text === '/managers_list' || text === '📋 Managers List') {
+        const admin = await isAdmin(chatId);
         if (admin) {
             try {
                 const result = await pool.query(`SELECT * FROM managers`);
@@ -508,7 +335,7 @@ app.post('/jirabotapi', async (req, res) => {
 
                 if (managers.length === 0) {
                     await sendMessageBot2(chatId, "📭 No registered managers.");
-                    return res.sendStatus(200);
+                    return; // ✅ stop execution
                 }
 
                 for (const manager of managers) {
@@ -539,48 +366,86 @@ app.post('/jirabotapi', async (req, res) => {
         } else {
             await sendMessageBot1(chatId, "🚫 You are not authorized to use this command.");
         }
-        return res.sendStatus(200);
+        return; // ✅ no res.sendStatus
+    }
+    if (text === '/managers_list' || text === '📋 Managers List') {
+        const admin = await isAdmin(chatId);
+        if (admin) {
+            try {
+                const result = await pool.query(`SELECT * FROM managers`);
+                const managers = result.rows;
+
+                if (managers.length === 0) {
+                    await sendMessageBot2(chatId, "📭 No registered managers.");
+                    return; // ✅ stop execution
+                }
+
+                for (const manager of managers) {
+                    const phone = manager.phone_number || 'Not provided';
+                    const email = manager.jira_email || '❌ Not registered yet';
+                    const telegramId = manager.telegram_chat_id || '❌ Not linked';
+
+                    await sendMessageBot2(
+                        chatId,
+                        `👤 *Phone:* ${phone}\n📧 *Jira Email:* ${email}\n💬 *Telegram ID:* ${telegramId}`,
+                        {
+                            parse_mode: 'Markdown',
+                            reply_markup: {
+                                inline_keyboard: [
+                                    [
+                                        { text: '✏️ Edit', callback_data: `edit_user:${manager.id}` },
+                                        { text: '🗑 Delete', callback_data: `delete_user:${manager.id}` }
+                                    ]
+                                ]
+                            }
+                        }
+                    );
+                }
+            } catch (err) {
+                console.error("❌ Error fetching managers:", err);
+                await sendMessageBot2(chatId, "⚠️ Error retrieving managers from the database.");
+            }
+        } else {
+            await sendMessageBot1(chatId, "🚫 You are not authorized to use this command.");
+        }
+        return; // ✅ no res.sendStatus
     }
 
-    // Get access 
-    if (text === '/get_access' || text === 'Ask for access') {
-        await sendMessageBot2(chatId, '📲 To get access, please share your phone number:', {
+
+    // Ask for access
+    if (text === 'Ask for access') {
+        await sendMessage('📲 To get access, please share your phone number:', {
             reply_markup: {
-                keyboard: [
-                    [{ text: '📤 Share phone number', request_contact: true }],
-                    [{ text: '/cancel' }]
-                ],
+                keyboard: [[{ text: '📤 Share phone number', request_contact: true }], [{ text: '/cancel' }]],
                 resize_keyboard: true,
                 one_time_keyboard: true
             }
         });
-        return res.sendStatus(200);
+        return;
     }
 
-    if (text === '/show_projects_list' || text === 'Projects List') {
+    // Projects List
+    if (text === 'Projects List') {
         try {
-            const all = await getJiraProjects(); // Fetch all Jira projects
+            const all = await getJiraProjects();
             if (!Array.isArray(all) || all.length === 0) {
-                await sendMessageBot2(chatId, "⚠️ No projects found.");
-                return res.sendStatus(200);
+                await sendMessage("⚠️ No projects found.");
+                return;
             }
-
-            // Cache for callback pagination
-            projectCache[chatId] = all;
-            setTimeout(() => delete projectCache[chatId], 5 * 60 * 1000); // 5 minutes
 
             const page = 1;
             const size = 10;
             const totalPages = Math.ceil(all.length / size);
-            const subset = all.slice(0, size); // First 10
+            const subset = all.slice(0, size);
 
-            // Create message text
-            const textMsg = [
+            projectCache[chatId] = all;
+            setTimeout(() => delete projectCache[chatId], 5 * 60 * 1000); // Clear cache after 5 mins
+
+            const messageText = [
                 `📋 *Jira Projects (${page}/${totalPages})*`,
                 ...subset.map((p, i) => `${i + 1}. ${p.name}`)
             ].join('\n');
 
-            // Inline keyboard
             const keyboard = [];
             for (let i = 0; i < subset.length; i += 5) {
                 keyboard.push(
@@ -591,203 +456,242 @@ app.post('/jirabotapi', async (req, res) => {
                 );
             }
 
-            // Add pagination button if needed
             if (totalPages > 1) {
                 keyboard.push([{ text: '➡️', callback_data: `project_page:${page + 1}` }]);
             }
 
-            // Send message
-            await sendMessageBot2(chatId, textMsg, {
+            await bot2.sendMessage(chatId, messageText, {
                 parse_mode: 'Markdown',
-                reply_markup: { inline_keyboard: keyboard },
+                reply_markup: { inline_keyboard: keyboard }
             });
 
         } catch (err) {
             console.error('Error in /show_projects_list:', err);
-            await sendMessageBot2(chatId, '❌ Failed to load projects from Jira.');
+            await sendMessage('❌ Failed to load projects from Jira.');
+        }
+        return;
+    }
+
+
+});
+
+bot2.on('callback_query', async (callback) => {
+    const chatId = callback.message.chat.id;
+    const data = callback.data;
+
+    if (data.startsWith('delete_user:')) {
+        const userId = data.split(':')[1];
+        try {
+            await pool.query("DELETE FROM managers WHERE id = $1", [userId]);
+            await sendMessageBot2(chatId, `🗑 User deleted.`);
+        } catch (err) {
+            console.error("DB error:", err);
+            await sendMessageBot2(chatId, "❌ Failed to delete user.");
+        }
+        return;
+    }
+
+    if (data.startsWith('edit_user:')) {
+        const userId = data.split(':')[1];
+        const user = await pool.query("SELECT * FROM managers WHERE id = $1", [userId]);
+
+        if (user.rows.length === 0) {
+            await sendMessageBot2(chatId, "❗ Manager not found.");
+            return;
         }
 
-        return res.sendStatus(200);
-    }
-
-    // Cancel command
-    if (text === '/cancel') {
-        delete userStates[chatId]; // Clear any in-progress interaction
-        await sendMessageBot2(chatId, "❌ Cancelled. Back to main menu.", {
-            reply_markup: {
-                keyboard: (await MainMenuKeyboard()).reply_markup.keyboard,
-                resize_keyboard: true
+        userStates[chatId] = {
+            step: 'edit_email',
+            mode: 'edit',
+            data: {
+                id: userId,
+                phone: user.rows[0].phone_number,
+                email: user.rows[0].jira_email
             }
-        });
+        };
 
-        return res.sendStatus(200);
+        await sendMessageBot2(
+            chatId,
+            `📧 Current Jira email: ${user.rows[0].jira_email || "❌ Not registered"}\nPlease enter the new Jira email:`
+        );
+        return;
     }
 
+    if (data.startsWith('project_detail:')) {
+        const idx = parseInt(data.split(':')[1], 10);
+        const all = projectCache[chatId] || [];
+        if (isNaN(idx) || idx < 0 || idx >= all.length) {
+            await sendMessageBot2(chatId, "⚠️ Project not found or expired.");
+            return;
+        }
+        const proj = all[idx];
+        await sendMessageBot2(chatId, `📁 *${proj.name}*\nKey: \`${proj.key}\`\nID: \`${proj.id}\``, { parse_mode: 'Markdown' });
 
+        try {
+            const boards = await getBoardsByProject(proj.id);
+            const boardId = boards.values?.[0]?.id;
+            if (!boardId) {
+                await sendMessageBot2(chatId, "⚠️ No boards found.");
+                return;
+            }
 
-    return res.sendStatus(200);
+            const data = await getIssuesByBoardId(boardId);
+            const issues = data.issues.map(i => ({
+                name: i.fields.summary || 'No summary',
+                status: i.fields.status?.name || 'Unknown',
+                priority: i.fields.priority?.name || 'None'
+            }));
+
+            if (issues.length === 0) {
+                await sendMessageBot2(chatId, "📭 No issues found.");
+            } else {
+                const grouped = issues.reduce((g, item) => {
+                    g[item.status] = g[item.status] || [];
+                    g[item.status].push(`🔹 *${item.name}* (${item.priority})`);
+                    return g;
+                }, {});
+
+                let msg = `🗂 *Issues by Status*\n\n`;
+                for (const [status, list] of Object.entries(grouped)) {
+                    msg += `*${status}*\n${list.join('\n')}\n\n`;
+                }
+                await sendMessageBot2(chatId, msg, { parse_mode: 'Markdown' });
+            }
+        } catch (e) {
+            console.error('Error loading issues:', e);
+            await sendMessageBot2(chatId, "❌ Failed to load boards or issues.");
+        }
+        return;
+    }
+
+    if (data.startsWith('project_page:')) {
+        const page = parseInt(data.split(':')[1], 10);
+        const all = projectCache[chatId] || [];
+        const total = all.length, size = 10, pages = Math.ceil(total / size);
+        if (isNaN(page) || page < 1 || page > pages) return;
+
+        const subset = all.slice((page - 1) * size, page * size);
+        const text = [`📋 *Jira Projects (${page}/${pages})*`, ...subset.map((p, i) => `${i + 1}. ${p.name}`)].join('\n');
+
+        const keyboard = [];
+        for (let i = 0; i < subset.length; i += 5) {
+            keyboard.push(subset.slice(i, i + 5).map((_, j) => {
+                const li = i + j;
+                return { text: emojiNumbers[li], callback_data: `project_detail:${(page - 1) * size + li}` };
+            }));
+        }
+        keyboard.push([
+            ...(page > 1 ? [{ text: '⬅️', callback_data: `project_page:${page - 1}` }] : []),
+            ...(page < pages ? [{ text: '➡️', callback_data: `project_page:${page + 1}` }] : [])
+        ]);
+
+        try {
+            await bot2.deleteMessage(chatId, callback.message.message_id).catch(() => { });
+            await sendMessageBot2(chatId, text, {
+                reply_markup: { inline_keyboard: keyboard },
+                parse_mode: 'Markdown'
+            });
+        } catch (err) {
+            console.error("Error handling pagination:", err);
+        }
+
+        return;
+    }
+
+    // Always acknowledge callback
+    await bot2.answerCallbackQuery(callback.id);
 });
 
 
+// ============= Developers bot =============
 
-app.post("/webhook", async (req, res) => {
-    const body = req.body;
+bot1.on('message', async (msg) => {
+    const chatId = msg.chat.id;
+    const text = msg.text?.trim();
+    const sendMessage = (text, options = {}) => bot1.sendMessage(chatId, text, options);
 
-    // callback query
-    if (body.callback_query) {
-        const callback = body.callback_query;
-        const chatId = callback.message.chat.id;
-        const data = callback.data;
+    if (!text) return;
 
-
-        if (!await isAdmin(chatId)) {
-            await sendMessageBot1(chatId, "🚫 You are not authorized for this action.");
-            return res.sendStatus(200);
+    if (text === '/cancel') {
+        if (userStates[chatId]) {
+            delete userStates[chatId];
+            await sendMessage("❌ Operation cancelled.");
+        } else {
+            await sendMessage("ℹ️ Nothing to cancel.");
         }
-
-        if (data.startsWith('delete_user:')) {
-            const userId = data.split(':')[1];
-            await pool.query("DELETE FROM jira_users WHERE id = $1", [userId]);
-            await sendMessageBot1(chatId, `🗑 User deleted.`);
-            return res.sendStatus(200);
-        }
-
-        if (data.startsWith('toggle_admin:')) {
-            const userId = data.split(':')[1];
-            const user = await pool.query("SELECT is_admin FROM jira_users WHERE id = $1", [userId]);
-            if (user.rows.length > 0) {
-                const newStatus = !user.rows[0].is_admin;
-                await pool.query("UPDATE jira_users SET is_admin = $1 WHERE id = $2", [newStatus, userId]);
-                await sendMessageBot1(chatId, `🔁 User admin status changed to: ${newStatus ? '✅ Admin' : '❌ Not Admin'}`);
-            } else {
-                await sendMessageBot1(chatId, `❗ User not found.`);
-            }
-            return res.sendStatus(200);
-        }
-
-        if (data.startsWith('edit_user:')) {
-            const userId = data.split(':')[1];
-            const user = await pool.query("SELECT * FROM jira_users WHERE id = $1", [userId]);
-            if (user.rows.length === 0) {
-                await sendMessageBot1(chatId, "❗ User not found.");
-                return res.sendStatus(200);
-            }
-
-            userStates[chatId] = {
-                step: 'edit_email',
-                mode: 'edit',
-                data: {
-                    id: userId,
-                    username: user.rows[0].username,
-                    email: user.rows[0].email
-                }
-            };
-
-            await sendMessageBot1(chatId, `📧 Current email: ${user.rows[0].email}\nEnter the new email:`);
-            return res.sendStatus(200);
-        }
-
-        return res.sendStatus(200);
+        return;
     }
 
-    if (!body || !body.message) return res.sendStatus(400);
-
-    const message = body.message;
-    const chatId = message.chat.id;
-    const text = message.text?.trim();
-
-    if (!text) return res.sendStatus(200);
-
-    // Handle commands
     if (text === '/start') {
-        await sendMessageBot1(chatId, `👋 Welcome! This bot is connected to your Jira system.
-Use /register to sign up or /update to change your information.`);
-        return res.sendStatus(200);
+        await sendMessage("👋 Welcome! This bot is connected to your Jira system.\nUse /register to sign up or /update to change your information.");
+        return;
     }
 
     if (text === '/register') {
         const checkUser = await pool.query("SELECT * FROM jira_users WHERE telegram_id = $1", [chatId]);
-
         if (checkUser.rows.length > 0) {
-            await sendMessageBot1(chatId, `⚠️ You are already registered with email: ${checkUser.rows[0].email}\nIf you want to change it, use /update`);
-            return res.sendStatus(200);
+            await sendMessage(`⚠️ You are already registered with email: ${checkUser.rows[0].email}\nIf you want to change it, use /update`);
+            return;
         }
-
         userStates[chatId] = { step: 'awaiting_email', data: {}, mode: 'register' };
-        await sendMessageBot1(chatId, `📧 Please enter your *Jira email address*:\nType /cancel to abort.`, { parse_mode: 'Markdown' });
-        return res.sendStatus(200);
+        await sendMessage("📧 Please enter your *Jira email address*:\nType /cancel to abort.", { parse_mode: 'Markdown' });
+        return;
     }
 
     if (text === '/update') {
         const checkUser = await pool.query("SELECT * FROM jira_users WHERE telegram_id = $1", [chatId]);
 
         if (checkUser.rows.length === 0) {
-            await sendMessageBot1(chatId, `⚠️ You are not registered yet. Please use /register first.`);
-            return res.sendStatus(200);
+            await sendMessage("⚠️ You are not registered yet. Please use /register first.");
+            return;
         }
 
         userStates[chatId] = { step: 'awaiting_email', data: {}, mode: 'update' };
-        await sendMessageBot1(chatId, `📧 Enter your new *Jira email address* to update:\nType /cancel to abort.`, { parse_mode: 'Markdown' });
-
-        return res.sendStatus(200);
+        await sendMessage("📧 Enter your new *Jira email address* to update:\nType /cancel to abort.", { parse_mode: 'Markdown' });
+        return;
     }
 
-    if (text === '/cancel') {
-        if (userStates[chatId]) {
-            delete userStates[chatId];
-            await sendMessageBot1(chatId, "❌ Operation cancelled.");
-        } else {
-            await sendMessageBot1(chatId, "ℹ️ Nothing to cancel.");
-        }
-        return res.sendStatus(200);
-    }
-
-
-    // Awaiting email
     if (userStates[chatId]?.step === 'awaiting_email') {
         if (!isValidEmail(text)) {
-            await sendMessageBot1(chatId, "❌ Invalid email format. Please enter a valid Jira email.\nType /cancel to abort.");
-            return res.sendStatus(200);
+            await sendMessage("❌ Invalid email format. Please enter a valid Jira email.\nType /cancel to abort.");
+            return;
         }
 
         const mode = userStates[chatId].mode;
         const existing = await pool.query("SELECT * FROM jira_users WHERE email = $1", [text]);
 
         if (mode === 'register' && existing.rows.length > 0) {
-            await sendMessageBot1(chatId, "⚠️ This email is already registered. Use /update to change your info.\nType /cancel to abort.");
+            await sendMessage("⚠️ This email is already registered. Use /update to change your info.\nType /cancel to abort.");
             delete userStates[chatId];
-            return res.sendStatus(200);
+            return;
         }
 
         if (mode === 'update' && existing.rows.length > 0 && existing.rows[0].telegram_id !== chatId) {
-            await sendMessageBot1(chatId, "⚠️ This email is already used by another user. Please use a different one.");
+            await sendMessage("⚠️ This email is already used by another user. Please use a different one.");
             delete userStates[chatId];
-            return res.sendStatus(200);
+            return;
         }
-
 
         const code = Math.floor(100000 + Math.random() * 900000);
         userStates[chatId].data.verificationCode = code;
-        await sendVerificationCode(text, code);
-        await sendMessageBot1(chatId, `📩 A verification code has been sent to your email. Please enter the code:\nType /cancel to abort.`);
-
         userStates[chatId].data.email = text;
         userStates[chatId].step = 'awaiting_verification_code';
-        return res.sendStatus(200);
+
+        await sendVerificationCode(text, code);
+        await sendMessage("📩 A verification code has been sent to your email. Please enter the code:\nType /cancel to abort.");
+        return;
     }
 
     if (userStates[chatId]?.step === 'awaiting_verification_code') {
         if (text === userStates[chatId].data.verificationCode.toString()) {
             userStates[chatId].step = 'awaiting_username';
-            await sendMessageBot1(chatId, `✅ Verified! Now enter your *Jira username*:`, { parse_mode: 'Markdown' });
+            await sendMessage("✅ Verified! Now enter your *Jira username*:", { parse_mode: 'Markdown' });
         } else {
-            await sendMessageBot1(chatId, "❌ Incorrect code. Please try again.");
+            await sendMessage("❌ Incorrect code. Please try again.");
         }
-        return res.sendStatus(200);
+        return;
     }
 
-
-    // Awaiting username
     if (userStates[chatId]?.step === 'awaiting_username') {
         const { email, mode } = userStates[chatId].data;
         const username = text;
@@ -801,73 +705,207 @@ Use /register to sign up or /update to change your information.`);
                 [chatId, username, email]
             );
 
-            await sendMessageBot1(chatId,
-                `✅ Your info has been ${userStates[chatId].mode === 'register' ? 'registered' : 'updated'}!\n📧 Email: ${email}\n👤 Username: ${username}`
+            await sendMessage(
+                `✅ Your info has been ${mode === 'register' ? 'registered' : 'updated'}!\n📧 Email: ${email}\n👤 Username: ${username}`
             );
         } catch (err) {
             console.error("DB save error:", err);
-            await sendMessageBot1(chatId, '❌ Error saving to database.');
+            await sendMessage('❌ Error saving to database.');
         }
 
         delete userStates[chatId];
-        return res.sendStatus(200);
+        return;
     }
 
-    // show users
-    if (text.startsWith('/users')) {
-        const admin = await isAdmin(chatId)
-        if (admin) {
-            const users = await pool.query("SELECT id, username, email, is_admin FROM jira_users");
-
-            if (users.rows.length === 0) {
-                await sendMessageBot1(chatId, "📭 No registered users.");
-                return res.sendStatus(200);
-            }
-
-            for (const user of users.rows) {
-                await sendMessageBot1(chatId,
-                    `👤 *${user.username}*\n📧 ${user.email}\n🛡 Admin: ${user.is_admin ? "✅ Yes" : "❌ No"}`,
-                    {
-                        parse_mode: 'Markdown',
-                        reply_markup: {
-                            inline_keyboard: [
-                                [
-                                    { text: '✏️ Edit', callback_data: `edit_user:${user.id}` },
-                                    { text: '🗑 Delete', callback_data: `delete_user:${user.id}` }
-                                ],
-                                [
-                                    { text: user.is_admin ? '❌ Remove Admin' : '✅ Make Admin', callback_data: `toggle_admin:${user.id}` }
-                                ]
-                            ]
-                        }
-                    }
-                );
-            }
-
-        } else {
-            await sendMessageBot1(chatId, "🚫 You are not authorized to use this command.");
+    if (text === '/users') {
+        const admin = await isAdmin(chatId);
+        if (!admin) {
+            await sendMessage("🚫 You are not authorized to use this command.");
+            return;
         }
-        return res.sendStatus(200);
+
+        const result = await pool.query("SELECT id, username, email, is_admin FROM jira_users");
+        const users = result.rows;
+
+        if (users.length === 0) {
+            await sendMessage("📭 No registered users.");
+            return;
+        }
+
+        const page = 1;
+        const size = 10;
+        const totalPages = Math.ceil(users.length / size);
+
+        userPages[chatId] = users; // save all for pagination
+
+        const subset = users.slice(0, size);
+
+        for (const user of subset) {
+            await bot1.sendMessage(chatId,
+                `👤 *${user.username}*\n📧 ${user.email}\n🛡 Admin: ${user.is_admin ? "✅ Yes" : "❌ No"}`,
+                {
+                    parse_mode: 'Markdown',
+                    reply_markup: {
+                        inline_keyboard: [
+                            [
+                                { text: '✏️ Edit', callback_data: `edit_user:${user.id}` },
+                                { text: '🗑 Delete', callback_data: `delete_user:${user.id}` }
+                            ]
+                        ]
+                    }
+                }
+            );
+        }
+
+        if (totalPages > 1) {
+            await bot1.sendMessage(chatId, `📄 Page 1 of ${totalPages}`, {
+                reply_markup: {
+                    inline_keyboard: [
+                        [{ text: '➡️ Next', callback_data: `users_page:2` }]
+                    ]
+                }
+            });
+        }
+        return;
     }
 
-    // Help 
+
+
     if (text === '/help') {
-        await sendMessageBot1(chatId, `📌 Available commands:
-    /start - Welcome message
-    /register - Register your Jira info
-    /update - Update your info
-    /users - (Admins only) List all registered users
-    /cancel - Press to abort the command.
-    `);
-        return res.sendStatus(200);
+        await sendMessage(`📌 Available commands:
+        /start - Welcome message
+        /register - Register your Jira info
+        /update - Update your info
+        /users - (Admins only) List all registered users
+        /cancel - Press to abort the command.`);
+        return;
+    }
+
+    // No match fallback (optional)
+});
+
+bot1.on('callback_query', async (callback) => {
+    const chatId = callback.message.chat.id;
+    const data = callback.data;
+    const sendMessage = (text, options = {}) => bot1.sendMessage(chatId, text, options);
+
+    // Always respond to callback to remove "loading..." state
+    await bot1.answerCallbackQuery(callback.id);
+
+    if (!await isAdmin(chatId)) {
+        await sendMessage("🚫 You are not authorized for this action.");
+        return;
+    }
+
+    if (data.startsWith('delete_user:')) {
+        const userId = data.split(':')[1];
+        try {
+            await pool.query("DELETE FROM jira_users WHERE id = $1", [userId]);
+            await sendMessage(`🗑 User deleted.`);
+        } catch (err) {
+            console.error("❌ Delete error:", err);
+            await sendMessage(`❌ Failed to delete user.`);
+        }
+        return;
+    }
+
+    if (data.startsWith('toggle_admin:')) {
+        const userId = data.split(':')[1];
+        try {
+            const user = await pool.query("SELECT is_admin FROM jira_users WHERE id = $1", [userId]);
+            if (user.rows.length > 0) {
+                const newStatus = !user.rows[0].is_admin;
+                await pool.query("UPDATE jira_users SET is_admin = $1 WHERE id = $2", [newStatus, userId]);
+                await sendMessageBot1(chatId, `🔁 User admin status changed to: ${newStatus ? '✅ Admin' : '❌ Not Admin'}`);
+            } else {
+                await sendMessageBot1(chatId, `❗ User not found.`);
+            }
+        } catch (err) {
+            console.error("❌ Toggle admin error:", err);
+            await sendMessageBot1(chatId, `❌ Failed to update admin status.`);
+        }
+        return;
+    }
+
+    if (data.startsWith('edit_user:')) {
+        const userId = data.split(':')[1];
+        try {
+            const user = await pool.query("SELECT * FROM jira_users WHERE id = $1", [userId]);
+            if (user.rows.length === 0) {
+                await sendMessageBot1(chatId, "❗ User not found.");
+                return;
+            }
+
+            userStates[chatId] = {
+                step: 'edit_email',
+                mode: 'edit',
+                data: {
+                    id: userId,
+                    username: user.rows[0].username,
+                    email: user.rows[0].email
+                }
+            };
+
+            await sendMessageBot1(chatId, `📧 Current email: ${user.rows[0].email}\nEnter the new email:`);
+        } catch (err) {
+            console.error("❌ Edit error:", err);
+            await sendMessageBot1(chatId, "❌ Failed to fetch user data.");
+        }
+        return;
+    }
+
+    if (data.startsWith('users_page:')) {
+        const page = parseInt(data.split(':')[1], 10);
+        const all = userPages[chatId] || [];
+        const size = 10;
+        const totalPages = Math.ceil(all.length / size);
+
+        if (isNaN(page) || page < 1 || page > totalPages) {
+            await sendMessageBot1(chatId, "❗ Invalid page.");
+            return;
+        }
+
+        const subset = all.slice((page - 1) * size, page * size);
+
+        for (const user of subset) {
+            await bot1.sendMessage(chatId,
+                `👤 *${user.username}*\n📧 ${user.email}\n🛡 Admin: ${user.is_admin ? "✅ Yes" : "❌ No"}`,
+                {
+                    parse_mode: 'Markdown',
+                    reply_markup: {
+                        inline_keyboard: [
+                            [
+                                { text: '✏️ Edit', callback_data: `edit_user:${user.id}` },
+                                { text: '🗑 Delete', callback_data: `delete_user:${user.id}` }
+                            ]
+                        ]
+                    }
+                }
+            );
+        }
+
+        const navButtons = [];
+        if (page > 1) navButtons.push({ text: '⬅️ Prev', callback_data: `users_page:${page - 1}` });
+        if (page < totalPages) navButtons.push({ text: '➡️ Next', callback_data: `users_page:${page + 1}` });
+
+        await bot1.sendMessage(chatId, `📄 Page ${page} of ${totalPages}`, {
+            reply_markup: {
+                inline_keyboard: [navButtons]
+            }
+        });
+
+        return;
     }
 
 
+});
 
+process.on('unhandledRejection', (reason, promise) => {
+    console.error('Unhandled Rejection:', reason);
+});
 
-
-    // No match
-    return res.sendStatus(200);
+process.on('uncaughtException', (err) => {
+    console.error('Uncaught Exception:', err);
 });
 
 

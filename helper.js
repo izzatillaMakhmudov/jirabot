@@ -5,9 +5,9 @@ const pool = require('./db')
 const dotenv = require("dotenv");
 const fetch = require('node-fetch')
 dotenv.config();
-// process.env.NODE_TLS_REJECT_UNAUTHORIZED = "0";
 
-const BOT_URL = process.env.BOT_URL;
+// process.env.NODE_TLS_REJECT_UNAUTHORIZED = "0";
+// const BOT_URL = process.env.BOT_URL;
 
 const httpsAgent = new https.Agent({
     rejectUnauthorized: false, // <- ignore SSL errors (temporary fix)
@@ -32,34 +32,37 @@ if (!TELEGRAM_TOKEN2) {
 }
 
 // Load tokens from .env
-const bot1 = new TelegramBot(TELEGRAM_TOKEN1, { polling: false });
-const bot2 = new TelegramBot(TELEGRAM_TOKEN2, { polling: false });
-bot1.setWebHook(`${BOT_URL}/webhook`);
-bot2.setWebHook(`${BOT_URL}/jirabotapi`);
+const bot1 = new TelegramBot(TELEGRAM_TOKEN1, { polling: true });
+const bot2 = new TelegramBot(TELEGRAM_TOKEN2, { polling: true });
+// bot1.setWebHook(`${BOT_URL}/webhook`);
+// bot2.setWebHook(`${BOT_URL}/jirabotapi`);
 
-const sendMessageBot1 = async (chatId, text, options = {}) => {
-    await fetch(`https://api.telegram.org/bot${TELEGRAM_TOKEN1}/sendMessage`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-            chat_id: chatId,
-            text,
-            ...options
-        })
-    });
-};
+// const sendMessageBot1 = async (chatId, text, options = {}) => {
+//     await fetch(`https://api.telegram.org/bot${TELEGRAM_TOKEN1}/sendMessage`, {
+//         method: "POST",
+//         headers: { "Content-Type": "application/json" },
+//         body: JSON.stringify({
+//             chat_id: chatId,
+//             text,
+//             ...options
+//         })
+//     });
+// };
 
-const sendMessageBot2 = async (chatId, text, options = {}) => {
-    await fetch(`https://api.telegram.org/bot${TELEGRAM_TOKEN2}/sendMessage`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-            chat_id: chatId,
-            text,
-            ...options
-        })
-    });
-};
+// const sendMessageBot2 = async (chatId, text, options = {}) => {
+//     await fetch(`https://api.telegram.org/bot${TELEGRAM_TOKEN2}/sendMessage`, {
+//         method: "POST",
+//         headers: { "Content-Type": "application/json" },
+//         body: JSON.stringify({
+//             chat_id: chatId,
+//             text,
+//             ...options
+//         })
+//     });
+// };
+
+const sendMessageBot1 = (chatId, text, options = {}) => bot1.sendMessage(chatId, text, options);
+const sendMessageBot2 = (chatId, text, options = {}) => bot2.sendMessage(chatId, text, options);
 
 
 const sendLongMessagebot1 = async (chatId, message, chunkSize = 4000) => {
@@ -67,6 +70,7 @@ const sendLongMessagebot1 = async (chatId, message, chunkSize = 4000) => {
         await sendMessageBot1(chatId, message.substring(i, i + chunkSize));
     }
 };
+
 
 const sendLongMessagebot2 = async (chatId, message, chunkSize = 4000) => {
     for (let i = 0; i < message.length; i += chunkSize) {
@@ -141,7 +145,7 @@ const isAdmin = async (chatId) => {
 
 // Fetch data from jira
 async function getJiraProjects() {
-    const response = await fetch("https://jira.imv.uz/rest/api/2/project", {
+    const response = await fetch(`${JIRA_BASE_URL}/rest/api/2/project`, {
         method: "GET",
         headers: {
             Authorization: "Basic " + Buffer.from(`${JIRA_USERNAME}:${JIRA_PASSWORD}`).toString("base64"),
@@ -183,7 +187,7 @@ async function sendPaginatedProjects(chatId, projects, page) {
 }
 
 async function getBoardsByProject(projectKeyOrId) {
-    const response = await fetch(`https://jira.imv.uz/rest/agile/1.0/board?projectKeyOrId=${projectKeyOrId}`, {
+    const response = await fetch(`${JIRA_BASE_URL}/rest/agile/1.0/board?projectKeyOrId=${projectKeyOrId}`, {
         method: "GET",
         headers: {
             Authorization: "Basic " + Buffer.from(`${JIRA_USERNAME}:${JIRA_PASSWORD}`).toString("base64"),
@@ -199,7 +203,7 @@ async function getBoardsByProject(projectKeyOrId) {
 }
 
 async function getIssuesByBoardId(boardId) {
-    const url = `https://jira.imv.uz/rest/agile/1.0/board/${boardId}/issue`;
+    const url = `${JIRA_BASE_URL}/rest/agile/1.0/board/${boardId}/issue`;
     console.log("📡 Fetching:", url);
     const response = await fetch(url, {
         method: "GET",
@@ -221,10 +225,6 @@ async function getIssuesByBoardId(boardId) {
     return data;
 }
 
-
-
-
-
 module.exports = {
     isValidEmail,
     sendVerificationCode,
@@ -233,10 +233,7 @@ module.exports = {
     bot2,
     sendMessageBot1,
     sendMessageBot2,
-    sendLongMessagebot1,
-    sendLongMessagebot2,
     getJiraProjects,
-    sendPaginatedProjects,
     getBoardsByProject,
     getIssuesByBoardId
 };
