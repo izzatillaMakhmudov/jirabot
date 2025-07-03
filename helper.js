@@ -19,8 +19,8 @@ console.log("👉 Jira Base URL:", JIRA_BASE_URL);
 const ADMIN_IDS = process.env.ADMIN_IDS
 
 // Telegram connection
-const TELEGRAM_TOKEN1 = process.env.TELEGRAM_TOKEN_1;
-const TELEGRAM_TOKEN2 = process.env.TELEGRAM_TOKEN_2;
+const TELEGRAM_TOKEN1 = process.env.TELEGRAM_TOKEN_1_TEST;
+const TELEGRAM_TOKEN2 = process.env.TELEGRAM_TOKEN_2_TEST;
 
 if (!TELEGRAM_TOKEN1) {
     console.log('Missing TELEGRAM TOKEN in .env')
@@ -159,11 +159,73 @@ async function getBoardsByProject(projectKeyOrId) {
 
     const data = await response.json();
     return data; // List of boards
+
+}
+
+async function jiraRequest(endpoint) {
+    const response = await fetch(`${JIRA_BASE_URL}${endpoint}`, {
+        headers: {
+            'Authorization': 'Basic ' + Buffer.from(`${JIRA_USERNAME}:${JIRA_PASSWORD}`).toString('base64'),
+            'Accept': 'application/json'
+        },
+        agent: new (require("https").Agent)({ rejectUnauthorized: false })
+    });
+
+    if (!response.ok) {
+        const errorText = await response.text();
+        throw new Error(`Jira request failed: ${response.status} ${errorText}`);
+    }
+
+    return await response.json();
 }
 
 async function getIssuesByBoardId(boardId) {
-    const url = `${JIRA_BASE_URL}/rest/agile/1.0/board/${boardId}/issue`;
-    console.log("📡 Fetching:", url);
+    const allIssues = [];
+    let startAt = 0;
+    const maxResults = 1000; // 50 is the default and safe limit
+
+    while (true) {
+        const url = `${JIRA_BASE_URL}/rest/agile/1.0/board/${boardId}/issue?startAt=${startAt}&maxResults=${maxResults}`;
+        console.log("📡 Fetching:", url);
+
+        const response = await fetch(url, {
+            method: "GET",
+            headers: {
+                Authorization: "Basic " + Buffer.from(`${JIRA_USERNAME}:${JIRA_PASSWORD}`).toString("base64"),
+                "Content-Type": "application/json"
+            },
+            agent: new (require("https").Agent)({ rejectUnauthorized: false })
+        });
+
+        if (!response.ok) {
+            const errorBody = await response.text();
+            console.error("❌ Status:", response.status);
+            console.error("❌ Body:", errorBody);
+            throw new Error("Failed to fetch issues from board");
+        }
+
+        const data = await response.json();
+        allIssues.push(...data.issues);
+
+        if (data.issues.length < maxResults) break;
+        startAt += maxResults;
+    }
+
+    return { issues: allIssues };
+}
+
+
+const desiredStatusOrder = [
+    "Blocked", "«Заблокировано»",
+    "Backlog", "Отставание",
+    "Ready for Developing", "Selected for Development", "Ready for Developing", "Готово к разработке",
+    "In progress", "В процессе", "В работе",
+    "Rework", "Переработка",
+    "QA",
+    "Done", "Готово"
+];
+async function fetchAndSortStatuses(projectId) {
+    const url = `${JIRA_BASE_URL}/rest/api/2/project/${projectId}/statuses`;
     const response = await fetch(url, {
         method: "GET",
         headers: {
@@ -177,12 +239,44 @@ async function getIssuesByBoardId(boardId) {
         const errorBody = await response.text();
         console.error("❌ Status:", response.status);
         console.error("❌ Body:", errorBody);
-        throw new Error("Failed to fetch Issues");
+        throw new Error("Failed to fetch statuses");
     }
 
-    const data = await response.json();
-    return data;
+    const allStatusesResponse = await response.json();
+
+    // Flatten all status names
+    const statusMap = {};
+    allStatusesResponse.forEach(workflow => {
+        workflow.statuses.forEach(status => {
+            statusMap[status.name] = status;
+        });
+    });
+
+    const desiredStatusOrder = [
+        "Blocked",
+        "«Заблокировано»",
+        "Backlog",
+        "Отставание",
+        "Ready for Developing",
+        "Selected for Development",
+        "Готово к разработке",
+        "In progress",
+        "В процессе",
+        "В работе",
+        "Rework",
+        "Переработка",
+        "QA",
+        "Done",
+        "Готово"
+    ];
+
+    const sortedStatuses = desiredStatusOrder
+        .filter(name => statusMap[name])
+        .map(name => statusMap[name]);
+
+    return sortedStatuses;
 }
+
 
 module.exports = {
     isValidEmail,
@@ -194,5 +288,7 @@ module.exports = {
     sendMessageBot2,
     getJiraProjects,
     getBoardsByProject,
-    getIssuesByBoardId
+    getIssuesByBoardId,
+    fetchAndSortStatuses,
+    jiraRequest
 };
