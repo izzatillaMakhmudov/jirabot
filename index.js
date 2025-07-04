@@ -31,6 +31,9 @@ const emojiNumbers = ['1️⃣', '2️⃣', '3️⃣', '4️⃣', '5️⃣', '6�
 const statusLookup = {};
 const statusPages = {};
 
+const boardSelectionCache = {};
+
+
 
 
 
@@ -54,7 +57,41 @@ app.get("/users", async (req, res) => {
 });
 
 
+
 // jira API 
+
+app.post('/project-webhook', async (req, res) => {
+    const event = req.body;
+
+    if (!event || !event.issue || !event.issue.fields) {
+        return res.sendStatus(200); // Ignore invalid events
+    }
+
+    const projectId = event.issue.fields.project.id;
+    const issueKey = event.issue.key;
+    const summary = event.issue.fields.summary;
+    const changelog = event.changelog || {};
+    const user = event.user?.displayName || 'Unknown user';
+
+    const rows = await pool.query(
+        `SELECT chat_id FROM project_subscriptions WHERE project_id = $1`,
+        [projectId]
+    );
+
+    if (rows.rowCount === 0) return res.sendStatus(200); // No subscribers
+
+    const changeText = changelog.items?.map(item => {
+        return `• *${item.field}*: "${item.fromString || '–'}" → "${item.toString || '–'}"`;
+    }).join('\n') || '_No specific changes listed._';
+
+    const message = `🛠 *${user}* updated issue *${issueKey}*\n📝 ${summary}\n\n${changeText}`;
+
+    for (const { chat_id } of rows.rows) {
+        await bot2.sendMessage(chat_id, message, { parse_mode: 'Markdown' });
+    }
+
+    res.sendStatus(200);
+})
 
 app.post("/webhook-jira", async (req, res) => {
     const changeLog = req.body?.changelog
@@ -334,7 +371,7 @@ bot2.on('message', async (msg) => {
 
         try {
             await pool.query(`INSERT INTO managers (phone_number) VALUES ($1)`, [phoneNumber]);
-            await sendMessage("✅ Phone number has been saved to the database.", await MainMenuKeyboard(chatId));
+            await sendMessage("✅ Phone number has been saved to the database.", await MainMenuKeyboard());
         } catch (err) {
             console.error("DB save error:", err);
             await sendMessage("❌ Error saving to the database.");
@@ -459,6 +496,7 @@ bot2.on('message', async (msg) => {
 
 });
 
+
 bot2.on('callback_query', async (callback) => {
     const chatId = callback.message.chat.id;
     const data = callback.data;
@@ -502,63 +540,34 @@ bot2.on('callback_query', async (callback) => {
         return;
     }
 
-    if (data.startsWith('project_detail:')) {
-        const idx = parseInt(data.split(':')[1], 10);
-        const all = projectCache[chatId] || [];
+    if (data.startsWith('select_board:')) {
+        const boardId = parseInt(data.split(':')[1]);
+        const boardState = boardSelectionCache[chatId];
 
-        if (isNaN(idx) || idx < 0 || idx >= all.length) {
-            await sendMessageBot2(chatId, "⚠️ Project not found or expired.");
-            return;
+        if (!boardState || !boardState.boards.find(b => b.id === boardId)) {
+            return await sendMessageBot2(chatId, "⚠️ Board not found or expired.");
         }
 
-        const project = all[idx];
-        const currentProjectPage = Math.floor(idx / 10) + 1; // 👈 store project page number
-
-        // Show basic project info
-        await sendMessageBot2(chatId, `📁 *${project.name}*\nKey: \`${project.key}\`\nID: \`${project.id}\``, {
-            parse_mode: 'Markdown'
-        });
+        const selectedBoard = boardState.boards.find(b => b.id === boardId);
+        const project = boardState.project;
+        const projectPage = Math.floor(boardState.projectIndex / 10) + 1;
 
         try {
-            const boards = await getBoardsByProject(project.id);
+            const issueData = await getIssuesByBoardId(boardId);
+            const issues = issueData.issues;
 
-            if (!boards.values?.length) {
-                await sendMessageBot2(chatId, "⚠️ No boards found for this project.");
-                return;
-            }
 
-            const allIssues = [];
 
-            for (const board of boards.values.slice(0, 8)) {
-                const issueData = await getIssuesByBoardId(board.id);
-                allIssues.push(...issueData.issues);
-                
-            }
-
-            console.log(allIssues.length)
-            if (allIssues.length === 0) {
-                const page = currentProjectPage || 1;
-                const all = projectCache[chatId] || [];
-                const size = 10;
-                const pages = Math.ceil(all.length / size);
-
-                const backButton = [
-                    [{
-                        text: '⬅️ Back',
-                        callback_data: `project_page:${page}`
-                    }]
-                ];
-
-                await pushAndSend(bot2, chatId, "📭 No issues found across the boards.", {
-                    parse_mode: 'Markdown',
-                    reply_markup: { inline_keyboard: backButton }
+            if (!issues.length) {
+                await pushAndSend(bot2, chatId, "📭 No issues found in this board.", {
+                    reply_markup: {
+                        inline_keyboard: [[{ text: '⬅️ Back', callback_data: `project_detail:${boardState.projectIndex}` }]]
+                    }
                 });
-
                 return;
             }
 
-
-            const groupedByStatus = allIssues.reduce((acc, issue) => {
+            const groupedByStatus = issues.reduce((acc, issue) => {
                 const status = issue.fields.status?.name || 'Unknown';
                 const summary = issue.fields.summary || 'No summary';
                 const priority = issue.fields.priority?.name || 'None';
@@ -567,34 +576,31 @@ bot2.on('callback_query', async (callback) => {
                 return acc;
             }, {});
 
+
             const allStatusNames = Object.keys(groupedByStatus);
-            console.log(project.id)
             const sortedStatuses = await fetchAndSortStatuses(project.id);
-            
-            // Only keep desired statuses that exist in groupedByStatus
+
             const statusKeys = sortedStatuses
                 .map(status => status.name)
                 .filter(name => allStatusNames.includes(name));
 
+
             if (statusKeys.length === 0) {
-                await sendMessageBot2(chatId, "📭 No grouped issues with known statuses.", {
-                    reply_markup: {
-                        inline_keyboard: [[{ text: '⬅️ Back to Projects', callback_data: 'go_back' }]]
-                    }
-                });
+                await sendMessageBot2(chatId, "📭 No issues found with known statuses.");
                 return;
             }
 
-
-
-            // 👇 Store status group info and project page for back navigation
             statusLookup[chatId] = {
                 statuses: statusKeys,
                 grouped: groupedByStatus,
-                projectPage: currentProjectPage // 👈 This will help go_back return to correct page
+                projectPage,
+                projectIndex: boardState.projectIndex,
+                boardId: selectedBoard.id,
+                boardName: selectedBoard.name,
+                projectId: project.id
             };
 
-            let message = `🗂 *Issues grouped by Status (from all boards of "${project.name}")*\n\n`;
+            let message = `🗂 *Issues grouped by Status in "${selectedBoard.name}"*\n\n`;
             statusKeys.forEach((status, idx) => {
                 const count = groupedByStatus[status].length;
                 message += `*${idx + 1}. ${status}* — ${count} issues\n`;
@@ -610,8 +616,8 @@ bot2.on('callback_query', async (callback) => {
                 inlineKeyboard.push(inlineButtons.slice(i, i + 4));
             }
 
-            // 👇 Add back button at the bottom
-            inlineKeyboard.push([{ text: '⬅️ Back', callback_data: 'go_back' }]);
+            inlineKeyboard.push([{ text: '⬅️ Back', callback_data: `project_detail:${boardState.projectIndex}` }]);
+
 
             await pushAndSend(bot2, chatId, message, {
                 parse_mode: 'Markdown',
@@ -619,12 +625,112 @@ bot2.on('callback_query', async (callback) => {
             });
 
         } catch (e) {
-            console.error('Error loading issues by status:', e);
-            await sendMessageBot2(chatId, "❌ Failed to load issues or boards.");
+            console.error("Error loading issues for selected board:", e);
+            await sendMessageBot2(chatId, "❌ Failed to load issues.");
         }
 
         return;
     }
+
+    if (data.startsWith('toggle_notify:')) {
+        const projectId = parseInt(data.split(':')[1], 10);
+        const existing = await pool.query(
+            `SELECT 1 FROM project_subscriptions WHERE chat_id = $1 AND project_id = $2`,
+            [chatId, projectId]
+        );
+
+        if (existing.rowCount > 0) {
+            await pool.query(`DELETE FROM project_subscriptions WHERE chat_id = $1 AND project_id = $2`, [chatId, projectId]);
+            await sendMessage(`🔕 Notifications *disabled* for project ID ${projectId}.`, { parse_mode: 'Markdown' });
+        } else {
+            await pool.query(`INSERT INTO project_subscriptions (chat_id, project_id) VALUES ($1, $2)`, [chatId, projectId]);
+            await sendMessage(`🔔 Notifications *enabled* for project ID ${projectId}.`, { parse_mode: 'Markdown' });
+        }
+
+        return;
+    }
+
+
+    if (data.startsWith('project_detail:')) {
+        const idx = parseInt(data.split(':')[1], 10);
+        const all = projectCache[chatId] || [];
+
+        if (isNaN(idx) || idx < 0 || idx >= all.length) {
+            await sendMessageBot2(chatId, "⚠️ Project not found or expired.");
+            return;
+        }
+
+
+
+
+        const project = all[idx];
+        const currentProjectPage = Math.floor(idx / 10) + 1;
+
+        // await sendMessageBot2(chatId, `📁 *${project.name}*\nKey: \`${project.key}\`\nID: \`${project.id}\``, {
+        //     parse_mode: 'Markdown'
+        // });
+
+        const isSubscribed = await pool.query(
+            "SELECT 1 FROM project_subscriptions WHERE chat_id = $1 AND project_id = $2",
+            [chatId, project.id]
+        );
+
+        try {
+            const boards = await getBoardsByProject(project.id);
+
+            if (!boards.values?.length) {
+                await sendMessageBot2(chatId, "⚠️ No boards found for this project.");
+                return;
+            }
+
+            // Store boards temporarily for user
+            boardSelectionCache[chatId] = {
+                project,
+                boards: boards.values,
+                projectIndex: idx
+            };
+
+            const keyboard = boards.values.map(board => {
+                return [
+                    {
+                        text: board.name,
+                        callback_data: `select_board:${board.id}`
+                    }
+                ];
+            });
+            keyboard.push([{
+                text: isSubscribed.rowCount > 0 ? '🔕 Turn Off Notifications' : '🔔 Turn On Notifications',
+                callback_data: `toggle_notify:${project.id}`
+            }]);
+            keyboard.push([{ text: '⬅️ Back', callback_data: `project_page:${currentProjectPage}` }]);
+
+            // prevent duplicated board selector in history
+            const lastView = navigationStack[chatId]?.at(-1);
+            if (lastView?.text?.startsWith('🛠 *Select a board')) {
+                navigationStack[chatId].pop();
+            }
+
+
+            const lastMsg = navigationStack[chatId]?.at(-1);
+            if (!lastMsg?.text?.startsWith(`🛠 *Select a board to view issues for "${project.name}"*`)) {
+                await pushAndSend(bot2, chatId, `🛠 *Select a board to view issues for "${project.name}"*:`, {
+                    parse_mode: 'Markdown',
+                    reply_markup: {
+                        inline_keyboard: keyboard
+                    }
+                });
+            }
+
+
+
+        } catch (e) {
+            console.error('Error fetching boards:', e);
+            await sendMessageBot2(chatId, "❌ Failed to load boards.");
+        }
+
+        return;
+    }
+
 
 
     // Handle status_detail
@@ -732,14 +838,21 @@ bot2.on('callback_query', async (callback) => {
     if (data === 'go_back') {
         const state = statusLookup[chatId];
         const history = navigationStack[chatId];
+        console.log(history)
 
-        // 🟡 Case: Back from "🔎 Details for Status" → Show "Issues grouped by Status"
-        const isStatusDetail = history?.[history.length - 1]?.text?.startsWith('🔎 *Details for Status:');
+        if (!history || history.length < 2) {
+            await bot2.deleteMessage(chatId, callback.message.message_id).catch(() => { });
+            await sendMessage("⚠️ Nothing to go back to.");
+            return;
+        }
 
-        if (isStatusDetail && state) {
-            // Regenerate the grouped view
-            let message = `🗂 *Issues grouped by Status (from all boards)*\n\n`;
+        const current = history.pop();
+        // remove current message
+        const previous = history.pop();     // remove previous to re-send clean
 
+        // 1. Go back to grouped statuses (from 🔎 status_detail or page)
+        if (current.text.startsWith('🔎 *Details for Status:') && state) {
+            let message = `🗂 *Issues grouped by Status in "${state.boardName || 'all boards'}"*\n\n`;
             state.statuses.forEach((status, idx) => {
                 const count = state.grouped[status].length;
                 message += `*${idx + 1}. ${status}* — ${count} issues\n`;
@@ -754,71 +867,72 @@ bot2.on('callback_query', async (callback) => {
             for (let i = 0; i < inlineButtons.length; i += 4) {
                 inlineKeyboard.push(inlineButtons.slice(i, i + 4));
             }
+            inlineKeyboard.push([{ text: '⬅️ Back', callback_data: `back_to_board_selector:${state.projectIndex}` }]);
 
-            // 👇 Add Back to project list
-            inlineKeyboard.push([{ text: '⬅️ Back', callback_data: 'go_back' }]);
+            history.pop(); // remove current status detail
+            history.pop(); // remove grouped status view (to prevent duplication)
 
             await bot2.deleteMessage(chatId, callback.message.message_id).catch(() => { });
             await pushAndSend(bot2, chatId, message, {
                 parse_mode: 'Markdown',
                 reply_markup: { inline_keyboard: inlineKeyboard }
             });
+            return;
 
+        }
+
+        // 3. Go back to previous message (default safe fallback)
+        await bot2.deleteMessage(chatId, callback.message.message_id).catch(() => { });
+        await bot2.sendMessage(chatId, previous.text, {
+            parse_mode: 'Markdown',
+            reply_markup: previous.reply_markup
+        });
+
+        // Do not re-push old message again, or it will loop.
+        return;
+    }
+
+    if (data.startsWith('back_to_board_selector:')) {
+        const idx = parseInt(data.split(':')[1], 10);
+        const all = projectCache[chatId] || [];
+        console.log(data)
+        if (!all[idx]) return await sendMessage("⚠️ Project not found or expired.");
+
+        const project = all[idx];
+        const boards = await getBoardsByProject(project.id);
+
+        if (!boards.values?.length) {
+            await sendMessage("⚠️ No boards found for this project.");
             return;
         }
 
-        // 🟡 Case: Back from grouped view → Show list of projects
-        if (state && state.projectPage) {
-            const all = projectCache[chatId] || [];
-            const page = state.projectPage;
-            const size = 10;
-            const pages = Math.ceil(all.length / size);
-            const subset = all.slice((page - 1) * size, page * size);
+        boardSelectionCache[chatId] = {
+            project,
+            boards: boards.values,
+            projectIndex: idx
+        };
 
-            const text = [`📋 *Jira Projects (${page}/${pages})*`, ...subset.map((p, i) => `${i + 1}. ${p.name}`)].join('\n');
+        const keyboard = boards.values.map(board => [{
+            text: board.name,
+            callback_data: `select_board:${board.id}`
+        }]);
 
-            const keyboard = [];
-            for (let i = 0; i < subset.length; i += 5) {
-                keyboard.push(subset.slice(i, i + 5).map((_, j) => {
-                    const li = i + j;
-                    const emoji = emojiNumbers[li] || `${li + 1}`;
-                    return {
-                        text: emoji,
-                        callback_data: `project_detail:${(page - 1) * size + li}`
-                    };
-                }));
-            }
+        keyboard.push([{ text: '⬅️ Back', callback_data: `project_detail:${idx}` }]);
 
-            keyboard.push([
-                ...(page > 1 ? [{ text: '⬅️', callback_data: `project_page:${page - 1}` }] : []),
-                ...(page < pages ? [{ text: '➡️', callback_data: `project_page:${page + 1}` }] : [])
-            ]);
-
-            await bot2.deleteMessage(chatId, callback.message.message_id).catch(() => { });
-            await pushAndSend(bot2, chatId, text, {
+        const lastMsg = navigationStack[chatId]?.at(-1);
+        if (!lastMsg?.text?.startsWith(`🛠 *Select a board to view issues for "${project.name}"*`)) {
+            await pushAndSend(bot2, chatId, `🛠 *Select a board to view issues for "${project.name}"*:`, {
                 parse_mode: 'Markdown',
-                reply_markup: { inline_keyboard: keyboard }
+                reply_markup: {
+                    inline_keyboard: keyboard
+                }
             });
-
-            return;
         }
 
-        // 🟡 Default case
-        if (history && history.length > 1) {
-            history.pop(); // remove current
-            const prev = history[history.length - 1];
-
-            await bot2.deleteMessage(chatId, callback.message.message_id).catch(() => { });
-            await bot2.sendMessage(chatId, prev.text, {
-                parse_mode: 'Markdown',
-                reply_markup: prev.reply_markup
-            });
-        } else {
-            await sendMessage("⚠️ Nothing to go back to.");
-        }
 
         return;
     }
+
 
 
     await bot2.answerCallbackQuery(callback.id);
@@ -827,7 +941,7 @@ bot2.on('callback_query', async (callback) => {
 
 // ============= Developers bot =============
 
-// ✅ Cleaned and improved bot1 logic
+
 bot1.on('message', async (msg) => {
     const chatId = msg.chat.id;
     const text = msg.text?.trim();
@@ -1108,5 +1222,4 @@ app.listen(PORT, (err) => {
         console.log('Listening for jira webhook on port ', PORT)
     }
 })
-
 

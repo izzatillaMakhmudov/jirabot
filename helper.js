@@ -214,16 +214,6 @@ async function getIssuesByBoardId(boardId) {
     return { issues: allIssues };
 }
 
-
-const desiredStatusOrder = [
-    "Blocked", "«Заблокировано»",
-    "Backlog", "Отставание",
-    "Ready for Developing", "Selected for Development", "Ready for Developing", "Готово к разработке",
-    "In progress", "В процессе", "В работе",
-    "Rework", "Переработка",
-    "QA",
-    "Done", "Готово"
-];
 async function fetchAndSortStatuses(projectId) {
     const url = `${JIRA_BASE_URL}/rest/api/2/project/${projectId}/statuses`;
     const response = await fetch(url, {
@@ -257,6 +247,8 @@ async function fetchAndSortStatuses(projectId) {
         "«Заблокировано»",
         "Backlog",
         "Отставание",
+        "Analitik",
+        "Designer",
         "Ready for Developing",
         "Selected for Development",
         "Готово к разработке",
@@ -276,6 +268,29 @@ async function fetchAndSortStatuses(projectId) {
 
     return sortedStatuses;
 }
+async function getBoardColumns(boardId) {
+    const response = await fetch(`${JIRA_BASE_URL}/rest/agile/1.0/board/${boardId}/configuration`, {
+        method: "GET",
+        headers: {
+            Authorization: "Basic " + Buffer.from(`${JIRA_USERNAME}:${JIRA_PASSWORD}`).toString("base64"),
+            "Content-Type": "application/json"
+        },
+        agent: new (require("https").Agent)({ rejectUnauthorized: false })
+    });
+
+    if (!response.ok) {
+        const errorText = await response.text();
+        throw new Error(`Failed to fetch board configuration: ${errorText}`);
+    }
+
+    const config = await response.json();
+
+    return config.columnConfig.columns.map(col => ({
+        name: col.name,
+        statuses: col.statuses.map(s => s.name)
+    }));
+}
+
 
 
 module.exports = {
@@ -290,5 +305,6 @@ module.exports = {
     getBoardsByProject,
     getIssuesByBoardId,
     fetchAndSortStatuses,
-    jiraRequest
+    jiraRequest,
+    getBoardColumns
 };
