@@ -291,6 +291,33 @@ async function getBoardColumns(boardId) {
     }));
 }
 
+const saveUserNavigation = async (chatId, data) => {
+    try {
+        await pool.query(`INSERT INTO user_navigation (chat_id, navigation_stack)
+            VALUES ($1, $2)
+            ON CONFLICT (chat_id) DO UPDATE
+            SET navigation_stack = $2, updated_at = CURRENT_TIMESTAMP`,
+            [chatId, JSON.stringify(data)])
+    } catch (err) {
+        console.log("Error saving user navigation to the database:", err)
+    }
+
+}
+
+const getUserNavigation = async (chatId) => {
+    try {
+        const result = await pool.query('SELECT navigation_stack FROM user_navigation WHERE chat_id = $1', [chatId])
+        if (result.rows.length === 0) {
+            return null
+        }
+
+        return result.rows[0].navigation_stack
+    } catch (err) {
+        console.log("Error fetching user navigation:", err)
+        return null;
+    }
+}
+
 
 
 module.exports = {
@@ -306,5 +333,7 @@ module.exports = {
     getIssuesByBoardId,
     fetchAndSortStatuses,
     jiraRequest,
-    getBoardColumns
+    getBoardColumns,
+    saveUserNavigation,
+    getUserNavigation
 };
