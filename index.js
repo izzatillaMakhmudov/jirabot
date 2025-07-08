@@ -29,7 +29,8 @@ app.use(bodyParser.json())
 const projectCache = {};
 const emojiNumbers = ['1️⃣', '2️⃣', '3️⃣', '4️⃣', '5️⃣', '6️⃣', '7️⃣', '8️⃣', '9️⃣', '🔟'];
 const statusLookup = {};
-
+const userStates = {}
+const userPages = {}
 const boardSelectionCache = {};
 
 
@@ -60,59 +61,6 @@ app.get("/users", async (req, res) => {
 
 
 // jira API 
-
-// app.post("/notification", async (req, res) => {
-//     const event = req.body;
-
-//     if (!event || !event.issue || !event.issue.fields) {
-//         return res.sendStatus(200); // Ignore invalid events
-//     }
-
-//     const projectId = event.issue.fields.project.id;
-//     const issueKey = event.issue.key;
-//     const summary = event.issue.fields.summary;
-//     const changelog = event.changelog || {};
-//     const user = event.user?.displayName || 'Unknown user';
-
-//     // Determine if the event includes a comment
-//     const issueComment = event.comment?.body || null;
-//     const isCommentUpdate = event.webhookEvent === 'jira:issue_commented' || event.webhookEvent === 'comment_updated' || event.issue_event_type_name === 'issue_comment_edited';
-
-//     // If the event is only a comment update, we handle it separately to avoid duplication
-//     if (isCommentUpdate) {
-//         const commentText = `💬 *Comment Updated*:\n${issueComment}`;
-//         await sendCommentNotification(projectId, issueKey, summary, commentText);
-//         return res.sendStatus(200);
-//     }
-
-//     // Fetch subscribers for the project
-//     const rows = await pool.query(
-//         `SELECT chat_id FROM project_subscriptions WHERE project_id = $1`,
-//         [projectId]
-//     );
-
-//     if (rows.rowCount === 0) return res.sendStatus(200); // No subscribers
-
-//     // Prepare the change text for updates
-//     const changeText = changelog.items?.map(item => {
-//         return `• *${item.field}*: "${item.fromString || '–'}" → "${item.toString || '–'}"`;
-//     }).join('\n') || '_No specific changes listed._';
-
-//     // Prepare the base message
-//     let message = `🛠 *${user}* updated issue *${issueKey}*\n📝 ${summary}\n\n${changeText}`;
-
-//     // If there's a comment, include it in the message
-//     if (issueComment && !isCommentUpdate) {
-//         message += `\n💬 *Comment Added*:\n${issueComment}`;
-//     }
-
-//     // Send the message to all subscribers
-//     for (const { chat_id } of rows.rows) {
-//         await bot2.sendMessage(chat_id, message, { parse_mode: 'Markdown' });
-//     }
-
-//     res.sendStatus(200);
-// });
 app.post("/notification", async (req, res) => {
     const event = req.body;
 
@@ -190,185 +138,185 @@ const sendCommentNotification = async (projectId, issueKey, summary, commentText
 
 
 
-// app.post("/webhook-jira", async (req, res) => {
-//     const changeLog = req.body?.changelog
-//     const assigneName = req.body?.issue?.fields?.assignee?.displayName;
-//     const reporterName = req.body?.issue?.fields?.creator?.displayName;
-//     const reporterEmail = req.body?.issue?.fields?.creator?.emailAddress;
-//     const reporterUsername = req.body?.issue?.fields?.creator?.name;
-//     const assigneUsername = req.body?.issue?.fields?.assignee?.name;
-//     const assigneEmail = req.body?.issue?.fields?.assignee?.emailAddress;
-//     const projectName = req.body?.issue?.fields?.project?.name;
-//     const issueTypeName = req.body?.issue?.fields?.issuetype?.name;
-//     const issueTypeDescription = req.body?.issue?.fields?.issuetype?.description;
-//     const issuePriority = req.body?.issue?.fields?.priority?.name;
-//     const issueStatus = req.body?.issue?.fields?.status?.name;
-//     const issueSummary = req.body?.issue?.fields?.summary;
-//     const issueKey = req.body?.issue?.key;
-//     const webhookEvent = req.body?.webhookEvent;
-//     const issueComment = req.body?.comment?.body;
+app.post("/webhook-jira", async (req, res) => {
+    const changeLog = req.body?.changelog
+    const assigneName = req.body?.issue?.fields?.assignee?.displayName;
+    const reporterName = req.body?.issue?.fields?.creator?.displayName;
+    const reporterEmail = req.body?.issue?.fields?.creator?.emailAddress;
+    const reporterUsername = req.body?.issue?.fields?.creator?.name;
+    const assigneUsername = req.body?.issue?.fields?.assignee?.name;
+    const assigneEmail = req.body?.issue?.fields?.assignee?.emailAddress;
+    const projectName = req.body?.issue?.fields?.project?.name;
+    const issueTypeName = req.body?.issue?.fields?.issuetype?.name;
+    const issueTypeDescription = req.body?.issue?.fields?.issuetype?.description;
+    const issuePriority = req.body?.issue?.fields?.priority?.name;
+    const issueStatus = req.body?.issue?.fields?.status?.name;
+    const issueSummary = req.body?.issue?.fields?.summary;
+    const issueKey = req.body?.issue?.key;
+    const webhookEvent = req.body?.webhookEvent;
+    const issueComment = req.body?.comment?.body;
 
-//     const messageTemplateUser = `
+    const messageTemplateUser = `
 
-// <b>👤 Reporter:</b>
-// • <b>Name:</b> ${reporterName}
-// • <b>Username:</b> ${reporterUsername}
+<b>👤 Reporter:</b>
+• <b>Name:</b> ${reporterName}
+• <b>Username:</b> ${reporterUsername}
 
-// <b>👤 Assignee:</b>
-// • <b>Name:</b> ${assigneName}
-// • <b>Username:</b> ${assigneUsername}
-//     `;
+<b>👤 Assignee:</b>
+• <b>Name:</b> ${assigneName}
+• <b>Username:</b> ${assigneUsername}
+    `;
 
-//     let messageTemplate = ''
+    let messageTemplate = ''
 
-//     switch (webhookEvent) {
-//         case 'jira:issue_created':
-//             {
-//                 messageTemplate += `<b>🆕 New issue has been created</b>`
-//                 messageTemplate += messageTemplateUser;
-//                 messageTemplate += `
-// <b>🗂 Project:</b> ${projectName}
-//     • <b>🎫 Issue Key:</b> ${issueKey}
-//     • <b>📝 Issue Type:</b> ${issueTypeName}
-//     • <b>🚨 Priority:</b> ${issuePriority}
-//     • <b>📌 Status:</b> ${issueStatus}
+    switch (webhookEvent) {
+        case 'jira:issue_created':
+            {
+                messageTemplate += `<b>🆕 New issue has been created</b>`
+                messageTemplate += messageTemplateUser;
+                messageTemplate += `
+<b>🗂 Project:</b> ${projectName}
+    • <b>🎫 Issue Key:</b> ${issueKey}
+    • <b>📝 Issue Type:</b> ${issueTypeName}
+    • <b>🚨 Priority:</b> ${issuePriority}
+    • <b>📌 Status:</b> ${issueStatus}
 
-// <b>📝 Task Name:</b>
-// ${issueSummary}
-// <b>🧾 Description:</b>
-// ${issueTypeDescription || "No description."}
-// `
-//                 break;
-//             }
+<b>📝 Task Name:</b>
+${issueSummary}
+<b>🧾 Description:</b>
+${issueTypeDescription || "No description."}
+`
+                break;
+            }
 
-//         case 'jira:issue_updated':
-//             {
-//                 if (req.body?.issue_event_type_name === 'issue_commented') {
-//                     break
-//                 }
-//                 messageTemplate += `<b>✏️ Issue has been updated</b>`
-//                 messageTemplate += `
+        case 'jira:issue_updated':
+            {
+                if (req.body?.issue_event_type_name === 'issue_commented') {
+                    break
+                }
+                messageTemplate += `<b>✏️ Issue has been updated</b>`
+                messageTemplate += `
 
-// <b>🗂 Project:</b> ${projectName}
-// <b>📝 Task Name:</b>
-// ${issueSummary}
-// `
-//                 messageTemplate += `<b>
-// 📝 Modified part:</b>
-// `
-//                 if (changeLog?.items && Array.isArray(changeLog.items)) {
-//                     changeLog.items.forEach(item => {
-//                         const field = item.field;
-//                         const fromString = item.fromString;
-//                         const toString = item.toString;
+<b>🗂 Project:</b> ${projectName}
+<b>📝 Task Name:</b>
+${issueSummary}
+`
+                messageTemplate += `<b>
+📝 Modified part:</b>
+`
+                if (changeLog?.items && Array.isArray(changeLog.items)) {
+                    changeLog.items.forEach(item => {
+                        const field = item.field;
+                        const fromString = item.fromString;
+                        const toString = item.toString;
 
-//                         messageTemplate += `<b> • ${field}:</b> ${fromString ? `from <i>${fromString}</i> to` : ``} <i>${toString}</i>`
+                        messageTemplate += `<b> • ${field}:</b> ${fromString ? `from <i>${fromString}</i> to` : ``} <i>${toString}</i>`
 
-//                     });
-//                 } else {
-//                     console.log("No changelog items found.");
-//                 }
+                    });
+                } else {
+                    console.log("No changelog items found.");
+                }
 
-//                 break
-//             }
+                break
+            }
 
-//         case 'jira:issue_deleted':
-//             {
-//                 messageTemplate += `<b>❌ Issue has been deleted</b>`
-//                 messageTemplate += messageTemplateUser;
-//                 messageTemplate += `
-// <b>🗂 Project:</b> ${projectName}
-//     • <b>🎫 Issue Key:</b> ${issueKey}
+        case 'jira:issue_deleted':
+            {
+                messageTemplate += `<b>❌ Issue has been deleted</b>`
+                messageTemplate += messageTemplateUser;
+                messageTemplate += `
+<b>🗂 Project:</b> ${projectName}
+    • <b>🎫 Issue Key:</b> ${issueKey}
 
-// <b>📝 Task Name:</b> ${issueSummary}
-//                 `
-//                 break
-//             }
+<b>📝 Task Name:</b> ${issueSummary}
+                `
+                break
+            }
 
-//         case 'comment_created':
-//             {
-//                 messageTemplate += `<b>💬 New comment added!</b>`
-//                 messageTemplate += `
+        case 'comment_created':
+            {
+                messageTemplate += `<b>💬 New comment added!</b>`
+                messageTemplate += `
 
-// <b>🗂 Project:</b> ${projectName}
-// <b>📝 Task Name:</b>
-// ${issueSummary}
-// `
-//                 messageTemplate += `💬 Comment: ${issueComment}`
-//                 break
-//             }
+<b>🗂 Project:</b> ${projectName}
+<b>📝 Task Name:</b>
+${issueSummary}
+`
+                messageTemplate += `💬 Comment: ${issueComment}`
+                break
+            }
 
-//         // case 'comment_updated': { }
+        // case 'comment_updated': { }
 
-//         // case 'comment_deleted': { }
+        // case 'comment_deleted': { }
 
-//         // case 'jira:worklog_updated': { }
+        // case 'jira:worklog_updated': { }
 
-//         // case 'jira:worklog_deleted': { }
+        // case 'jira:worklog_deleted': { }
 
-//         // case 'issuelink_created': { }
+        // case 'issuelink_created': { }
 
-//         // case 'issuelink_deleted': { }
+        // case 'issuelink_deleted': { }
 
-//         // case 'project_created': { }
+        // case 'project_created': { }
 
-//         // case 'project_updated': { }
+        // case 'project_updated': { }
 
-//         // case 'project_deleted': { }
+        // case 'project_deleted': { }
 
-//         // case 'board_created': { }
+        // case 'board_created': { }
 
-//         // case 'board_updated': { }
+        // case 'board_updated': { }
 
-//         // case 'board_deleted': { }
+        // case 'board_deleted': { }
 
-//         // case 'user_created': { }
+        // case 'user_created': { }
 
-//         // case 'user_updated': { }
+        // case 'user_updated': { }
 
-//         // case 'user_deleted': { }
+        // case 'user_deleted': { }
 
-//     }
-//     try {
-//         // Get both telegram IDs from DB
-//         const assigneeResult = await pool.query(
-//             `SELECT telegram_id FROM jira_users WHERE email = $1`,
-//             [assigneEmail]
-//         );
+    }
+    try {
+        // Get both telegram IDs from DB
+        const assigneeResult = await pool.query(
+            `SELECT telegram_id FROM jira_users WHERE email = $1`,
+            [assigneEmail]
+        );
 
-//         const reporterResult = await pool.query(
-//             `SELECT telegram_id FROM jira_users WHERE email = $1`,
-//             [reporterEmail]
-//         );
+        const reporterResult = await pool.query(
+            `SELECT telegram_id FROM jira_users WHERE email = $1`,
+            [reporterEmail]
+        );
 
-//         const assigneeId = assigneeResult.rows[0]?.telegram_id;
-//         const reporterId = reporterResult.rows[0]?.telegram_id;
+        const assigneeId = assigneeResult.rows[0]?.telegram_id;
+        const reporterId = reporterResult.rows[0]?.telegram_id;
 
-//         // Set to avoid duplicates
-//         const notifiedUsers = new Set();
+        // Set to avoid duplicates
+        const notifiedUsers = new Set();
 
-//         if (assigneeId) {
-//             notifiedUsers.add(assigneeId);
-//         }
+        if (assigneeId) {
+            notifiedUsers.add(assigneeId);
+        }
 
-//         if (reporterId) {
-//             notifiedUsers.add(reporterId);
-//         }
+        if (reporterId) {
+            notifiedUsers.add(reporterId);
+        }
 
-//         // Send message to all unique IDs
-//         for (const id of notifiedUsers) {
-//             await sendMessageBot1(id, messageTemplate, { parse_mode: "HTML" });
-//         }
+        // Send message to all unique IDs
+        for (const id of notifiedUsers) {
+            await sendMessageBot1(id, messageTemplate, { parse_mode: "HTML" });
+        }
 
-//         return res.status(200).json({ message: "Notifications sent." });
+        return res.status(200).json({ message: "Notifications sent." });
 
-//     } catch (err) {
-//         console.error("Error sending notifications:", err);
-//         return res.status(500).send("Server error");
-//     }
+    } catch (err) {
+        console.error("Error sending notifications:", err);
+        return res.status(500).send("Server error");
+    }
 
 
-// });
+});
 
 
 // ============= Managers bot =============
@@ -1351,267 +1299,267 @@ bot2.on('callback_query', async (callback) => {
 // ============= Developers bot =============
 
 
-// bot1.on('message', async (msg) => {
-//     const chatId = msg.chat.id;
-//     const text = msg.text?.trim();
-//     const sendMessage = (text, options = {}) => bot1.sendMessage(chatId, text, options);
+bot1.on('message', async (msg) => {
+    const chatId = msg.chat.id;
+    const text = msg.text?.trim();
+    const sendMessage = (text, options = {}) => bot1.sendMessage(chatId, text, options);
 
-//     if (!text) return;
+    if (!text) return;
 
-//     if (text === '/cancel') {
-//         if (userStates[chatId]) {
-//             delete userStates[chatId];
-//             await sendMessage("❌ Operation cancelled.");
-//         } else {
-//             await sendMessage("ℹ️ Nothing to cancel.");
-//         }
-//         return;
-//     }
+    if (text === '/cancel') {
+        if (userStates[chatId]) {
+            delete userStates[chatId];
+            await sendMessage("❌ Operation cancelled.");
+        } else {
+            await sendMessage("ℹ️ Nothing to cancel.");
+        }
+        return;
+    }
 
-//     if (text === '/start') {
-//         await sendMessage("👋 Welcome! This bot is connected to your Jira system.\nUse /register to sign up or /update to change your information.");
-//         return;
-//     }
+    if (text === '/start') {
+        await sendMessage("👋 Welcome! This bot is connected to your Jira system.\nUse /register to sign up or /update to change your information.");
+        return;
+    }
 
-//     if (text === '/register') {
-//         const checkUser = await pool.query("SELECT * FROM jira_users WHERE telegram_id = $1", [chatId]);
-//         if (checkUser.rows.length > 0) {
-//             await sendMessage(`⚠️ You are already registered with email: ${checkUser.rows[0].email}\nIf you want to change it, use /update`);
-//             return;
-//         }
-//         userStates[chatId] = { step: 'awaiting_email', data: {}, mode: 'register' };
-//         await sendMessage("📧 Please enter your *Jira email address*:\nType /cancel to abort.", { parse_mode: 'Markdown' });
-//         return;
-//     }
+    if (text === '/register') {
+        const checkUser = await pool.query("SELECT * FROM jira_users WHERE telegram_id = $1", [chatId]);
+        if (checkUser.rows.length > 0) {
+            await sendMessage(`⚠️ You are already registered with email: ${checkUser.rows[0].email}\nIf you want to change it, use /update`);
+            return;
+        }
+        userStates[chatId] = { step: 'awaiting_email', data: {}, mode: 'register' };
+        await sendMessage("📧 Please enter your *Jira email address*:\nType /cancel to abort.", { parse_mode: 'Markdown' });
+        return;
+    }
 
-//     if (text === '/update') {
-//         const checkUser = await pool.query("SELECT * FROM jira_users WHERE telegram_id = $1", [chatId]);
-//         if (checkUser.rows.length === 0) {
-//             await sendMessage("⚠️ You are not registered yet. Please use /register first.");
-//             return;
-//         }
-//         userStates[chatId] = { step: 'awaiting_email', data: {}, mode: 'update' };
-//         await sendMessage("📧 Enter your new *Jira email address* to update:\nType /cancel to abort.", { parse_mode: 'Markdown' });
-//         return;
-//     }
+    if (text === '/update') {
+        const checkUser = await pool.query("SELECT * FROM jira_users WHERE telegram_id = $1", [chatId]);
+        if (checkUser.rows.length === 0) {
+            await sendMessage("⚠️ You are not registered yet. Please use /register first.");
+            return;
+        }
+        userStates[chatId] = { step: 'awaiting_email', data: {}, mode: 'update' };
+        await sendMessage("📧 Enter your new *Jira email address* to update:\nType /cancel to abort.", { parse_mode: 'Markdown' });
+        return;
+    }
 
-//     if (userStates[chatId]?.step === 'awaiting_email') {
-//         if (!isValidEmail(text)) {
-//             await sendMessage("❌ Invalid email format. Please enter a valid Jira email.\nType /cancel to abort.");
-//             return;
-//         }
-//         const { mode } = userStates[chatId];
-//         const existing = await pool.query("SELECT * FROM jira_users WHERE email = $1", [text]);
+    if (userStates[chatId]?.step === 'awaiting_email') {
+        if (!isValidEmail(text)) {
+            await sendMessage("❌ Invalid email format. Please enter a valid Jira email.\nType /cancel to abort.");
+            return;
+        }
+        const { mode } = userStates[chatId];
+        const existing = await pool.query("SELECT * FROM jira_users WHERE email = $1", [text]);
 
-//         if (mode === 'register' && existing.rows.length > 0) {
-//             await sendMessage("⚠️ This email is already registered. Use /update to change your info.\nType /cancel to abort.");
-//             delete userStates[chatId];
-//             return;
-//         }
+        if (mode === 'register' && existing.rows.length > 0) {
+            await sendMessage("⚠️ This email is already registered. Use /update to change your info.\nType /cancel to abort.");
+            delete userStates[chatId];
+            return;
+        }
 
-//         if (mode === 'update' && existing.rows.length > 0 && existing.rows[0].telegram_id !== chatId) {
-//             await sendMessage("⚠️ This email is already used by another user. Please use a different one.");
-//             delete userStates[chatId];
-//             return;
-//         }
+        if (mode === 'update' && existing.rows.length > 0 && existing.rows[0].telegram_id !== chatId) {
+            await sendMessage("⚠️ This email is already used by another user. Please use a different one.");
+            delete userStates[chatId];
+            return;
+        }
 
-//         const code = Math.floor(100000 + Math.random() * 900000);
-//         userStates[chatId].data.verificationCode = code;
-//         userStates[chatId].data.email = text;
-//         userStates[chatId].step = 'awaiting_verification_code';
+        const code = Math.floor(100000 + Math.random() * 900000);
+        userStates[chatId].data.verificationCode = code;
+        userStates[chatId].data.email = text;
+        userStates[chatId].step = 'awaiting_verification_code';
 
-//         await sendVerificationCode(text, code);
-//         await sendMessage("📩 A verification code has been sent to your email. Please enter the code:\nType /cancel to abort.");
-//         return;
-//     }
+        await sendVerificationCode(text, code);
+        await sendMessage("📩 A verification code has been sent to your email. Please enter the code:\nType /cancel to abort.");
+        return;
+    }
 
-//     if (userStates[chatId]?.step === 'awaiting_verification_code') {
-//         if (text === userStates[chatId].data.verificationCode.toString()) {
-//             const { email, mode } = userStates[chatId].data;
-//             await sendMessage("✅ Verified!", { parse_mode: 'Markdown' });
+    if (userStates[chatId]?.step === 'awaiting_verification_code') {
+        if (text === userStates[chatId].data.verificationCode.toString()) {
+            const { email, mode } = userStates[chatId].data;
+            await sendMessage("✅ Verified!", { parse_mode: 'Markdown' });
 
-//             try {
-//                 await pool.query(
-//                     `INSERT INTO jira_users (telegram_id, email)
-//                      VALUES ($1, $2)
-//                      ON CONFLICT (telegram_id) DO UPDATE SET email = $2`,
-//                     [chatId, email]
-//                 );
-//                 await sendMessage(`✅ Your info has been ${mode === 'register' ? 'registered' : 'updated'}!\n📧 Email: ${email}`);
-//             } catch (err) {
-//                 console.error("DB save error:", err);
-//                 await sendMessage('❌ Error saving to database.');
-//             }
+            try {
+                await pool.query(
+                    `INSERT INTO jira_users (telegram_id, email)
+                     VALUES ($1, $2)
+                     ON CONFLICT (telegram_id) DO UPDATE SET email = $2`,
+                    [chatId, email]
+                );
+                await sendMessage(`✅ Your info has been ${mode === 'register' ? 'registered' : 'updated'}!\n📧 Email: ${email}`);
+            } catch (err) {
+                console.error("DB save error:", err);
+                await sendMessage('❌ Error saving to database.');
+            }
 
-//             delete userStates[chatId];
-//         } else {
-//             await sendMessage("❌ Incorrect code. Please try again.");
-//         }
-//         return;
-//     }
+            delete userStates[chatId];
+        } else {
+            await sendMessage("❌ Incorrect code. Please try again.");
+        }
+        return;
+    }
 
-//     if (userStates[chatId]?.step === 'edit_email') {
-//         const { id } = userStates[chatId].data;
-//         if (!isValidEmail(text)) {
-//             await sendMessage("❌ Invalid email format.");
-//             return;
-//         }
-//         await pool.query("UPDATE jira_users SET email = $1 WHERE id = $2", [text, id]);
-//         await sendMessage("✅ Email updated.");
-//         delete userStates[chatId];
-//         return;
-//     }
+    if (userStates[chatId]?.step === 'edit_email') {
+        const { id } = userStates[chatId].data;
+        if (!isValidEmail(text)) {
+            await sendMessage("❌ Invalid email format.");
+            return;
+        }
+        await pool.query("UPDATE jira_users SET email = $1 WHERE id = $2", [text, id]);
+        await sendMessage("✅ Email updated.");
+        delete userStates[chatId];
+        return;
+    }
 
-//     if (text === '/users') {
-//         const admin = await isAdmin(chatId);
-//         if (!admin) {
-//             await sendMessage("🚫 You are not authorized to use this command.");
-//             return;
-//         }
-//         const result = await pool.query("SELECT id, username, email, is_admin FROM jira_users");
-//         const users = result.rows;
-//         if (users.length === 0) return await sendMessage("📭 No registered users.");
+    if (text === '/users') {
+        const admin = await isAdmin(chatId);
+        if (!admin) {
+            await sendMessage("🚫 You are not authorized to use this command.");
+            return;
+        }
+        const result = await pool.query("SELECT id, username, email, is_admin FROM jira_users");
+        const users = result.rows;
+        if (users.length === 0) return await sendMessage("📭 No registered users.");
 
-//         const size = 10;
-//         userPages[chatId] = users;
-//         const totalPages = Math.ceil(users.length / size);
+        const size = 10;
+        userPages[chatId] = users;
+        const totalPages = Math.ceil(users.length / size);
 
-//         const showPage = async (page) => {
-//             const subset = users.slice((page - 1) * size, page * size);
-//             for (const user of subset) {
-//                 await sendMessage(`👤 *${user.username}*\n📧 ${user.email}\n🛡 Admin: ${user.is_admin ? "✅ Yes" : "❌ No"}`,
-//                     {
-//                         parse_mode: 'Markdown',
-//                         reply_markup: {
-//                             inline_keyboard: [
-//                                 [
-//                                     { text: '✏️ Edit', callback_data: `edit_user:${user.id}` },
-//                                     { text: '🗑 Delete', callback_data: `delete_user:${user.id}` }
-//                                 ],
-//                                 [
-//                                     {
-//                                         text: user.is_admin ? '❌ Remove Admin' : '✅ Make Admin',
-//                                         callback_data: `toggle_admin:${user.id}`
-//                                     }
-//                                 ]
-//                             ]
-//                         }
-//                     });
-//             }
-//             const navButtons = [];
-//             if (page > 1) navButtons.push({ text: '⬅️ Prev', callback_data: `users_page:${page - 1}` });
-//             if (page < totalPages) navButtons.push({ text: '➡️ Next', callback_data: `users_page:${page + 1}` });
-//             if (totalPages > 1) await sendMessage(`📄 Page ${page} of ${totalPages}`, {
-//                 reply_markup: { inline_keyboard: [navButtons] }
-//             });
-//         }
-//         await showPage(1);
-//         return;
-//     }
+        const showPage = async (page) => {
+            const subset = users.slice((page - 1) * size, page * size);
+            for (const user of subset) {
+                await sendMessage(`👤 *${user.username}*\n📧 ${user.email}\n🛡 Admin: ${user.is_admin ? "✅ Yes" : "❌ No"}`,
+                    {
+                        parse_mode: 'Markdown',
+                        reply_markup: {
+                            inline_keyboard: [
+                                [
+                                    { text: '✏️ Edit', callback_data: `edit_user:${user.id}` },
+                                    { text: '🗑 Delete', callback_data: `delete_user:${user.id}` }
+                                ],
+                                [
+                                    {
+                                        text: user.is_admin ? '❌ Remove Admin' : '✅ Make Admin',
+                                        callback_data: `toggle_admin:${user.id}`
+                                    }
+                                ]
+                            ]
+                        }
+                    });
+            }
+            const navButtons = [];
+            if (page > 1) navButtons.push({ text: '⬅️ Prev', callback_data: `users_page:${page - 1}` });
+            if (page < totalPages) navButtons.push({ text: '➡️ Next', callback_data: `users_page:${page + 1}` });
+            if (totalPages > 1) await sendMessage(`📄 Page ${page} of ${totalPages}`, {
+                reply_markup: { inline_keyboard: [navButtons] }
+            });
+        }
+        await showPage(1);
+        return;
+    }
 
-//     if (text === '/help') {
-//         await sendMessage(`📌 Available commands:\n/start - Welcome message\n/register - Register your Jira info\n/update - Update your info\n/users - (Admins only) List all users\n/cancel - Cancel the current operation.`);
-//         return;
-//     }
-// });
+    if (text === '/help') {
+        await sendMessage(`📌 Available commands:\n/start - Welcome message\n/register - Register your Jira info\n/update - Update your info\n/users - (Admins only) List all users\n/cancel - Cancel the current operation.`);
+        return;
+    }
+});
 
 // ========== Developers bot ==========
 
-// bot1.on('callback_query', async (callback) => {
-//     const chatId = callback.message.chat.id;
-//     const data = callback.data;
-//     const sendMessage = (text, options = {}) => bot1.sendMessage(chatId, text, options);
-//     await bot1.answerCallbackQuery(callback.id);
+bot1.on('callback_query', async (callback) => {
+    const chatId = callback.message.chat.id;
+    const data = callback.data;
+    const sendMessage = (text, options = {}) => bot1.sendMessage(chatId, text, options);
+    await bot1.answerCallbackQuery(callback.id);
 
-//     if (!await isAdmin(chatId)) return await sendMessage("🚫 You are not authorized for this action.");
+    if (!await isAdmin(chatId)) return await sendMessage("🚫 You are not authorized for this action.");
 
-//     if (data.startsWith('delete_user:')) {
-//         const userId = data.split(':')[1];
-//         try {
-//             await pool.query("DELETE FROM jira_users WHERE id = $1", [userId]);
-//             await sendMessage("🗑 User deleted.");
-//         } catch (err) {
-//             console.error("❌ Delete error:", err);
-//             await sendMessage("❌ Failed to delete user.");
-//         }
-//         return;
-//     }
+    if (data.startsWith('delete_user:')) {
+        const userId = data.split(':')[1];
+        try {
+            await pool.query("DELETE FROM jira_users WHERE id = $1", [userId]);
+            await sendMessage("🗑 User deleted.");
+        } catch (err) {
+            console.error("❌ Delete error:", err);
+            await sendMessage("❌ Failed to delete user.");
+        }
+        return;
+    }
 
-//     if (data.startsWith('toggle_admin:')) {
-//         const userId = data.split(':')[1];
-//         const result = await pool.query("SELECT is_admin FROM jira_users WHERE id = $1", [userId]);
-//         if (result.rows.length > 0) {
-//             const newStatus = !result.rows[0].is_admin;
-//             await pool.query("UPDATE jira_users SET is_admin = $1 WHERE id = $2", [newStatus, userId]);
-//             await sendMessage(`🔁 User admin status changed to: ${newStatus ? '✅ Admin' : '❌ Not Admin'}`);
-//         } else {
-//             await sendMessage("❗ User not found.");
-//         }
-//         return;
-//     }
+    if (data.startsWith('toggle_admin:')) {
+        const userId = data.split(':')[1];
+        const result = await pool.query("SELECT is_admin FROM jira_users WHERE id = $1", [userId]);
+        if (result.rows.length > 0) {
+            const newStatus = !result.rows[0].is_admin;
+            await pool.query("UPDATE jira_users SET is_admin = $1 WHERE id = $2", [newStatus, userId]);
+            await sendMessage(`🔁 User admin status changed to: ${newStatus ? '✅ Admin' : '❌ Not Admin'}`);
+        } else {
+            await sendMessage("❗ User not found.");
+        }
+        return;
+    }
 
-//     if (data.startsWith('edit_user:')) {
-//         const userId = data.split(':')[1];
-//         const result = await pool.query("SELECT * FROM jira_users WHERE id = $1", [userId]);
-//         if (result.rows.length === 0) return await sendMessage("❗ User not found.");
+    if (data.startsWith('edit_user:')) {
+        const userId = data.split(':')[1];
+        const result = await pool.query("SELECT * FROM jira_users WHERE id = $1", [userId]);
+        if (result.rows.length === 0) return await sendMessage("❗ User not found.");
 
-//         userStates[chatId] = {
-//             step: 'edit_email',
-//             mode: 'edit',
-//             data: {
-//                 id: userId,
-//                 username: result.rows[0].username,
-//                 email: result.rows[0].email
-//             }
-//         };
-//         await sendMessage(`📧 Current email: ${result.rows[0].email}\nEnter the new email:`);
-//         return;
-//     }
+        userStates[chatId] = {
+            step: 'edit_email',
+            mode: 'edit',
+            data: {
+                id: userId,
+                username: result.rows[0].username,
+                email: result.rows[0].email
+            }
+        };
+        await sendMessage(`📧 Current email: ${result.rows[0].email}\nEnter the new email:`);
+        return;
+    }
 
-//     if (data.startsWith('users_page:')) {
-//         const page = parseInt(data.split(':')[1], 10);
-//         const all = userPages[chatId] || [];
-//         const size = 10;
-//         const totalPages = Math.ceil(all.length / size);
+    if (data.startsWith('users_page:')) {
+        const page = parseInt(data.split(':')[1], 10);
+        const all = userPages[chatId] || [];
+        const size = 10;
+        const totalPages = Math.ceil(all.length / size);
 
-//         if (isNaN(page) || page < 1 || page > totalPages) {
-//             await sendMessage("❗ Invalid page.");
-//             return;
-//         }
+        if (isNaN(page) || page < 1 || page > totalPages) {
+            await sendMessage("❗ Invalid page.");
+            return;
+        }
 
-//         const subset = all.slice((page - 1) * size, page * size);
-//         for (const user of subset) {
-//             await sendMessage(
-//                 `👤 *${user.username}*\n📧 ${user.email}\n🛡 Admin: ${user.is_admin ? "✅ Yes" : "❌ No"}`,
-//                 {
-//                     parse_mode: 'Markdown',
-//                     reply_markup: {
-//                         inline_keyboard: [
-//                             [
-//                                 { text: '✏️ Edit', callback_data: `edit_user:${user.id}` },
-//                                 { text: '🗑 Delete', callback_data: `delete_user:${user.id}` }
-//                             ],
-//                             [
-//                                 {
-//                                     text: user.is_admin ? '❌ Remove Admin' : '✅ Make Admin',
-//                                     callback_data: `toggle_admin:${user.id}`
-//                                 }
-//                             ]
-//                         ]
-//                     }
-//                 }
-//             );
-//         }
+        const subset = all.slice((page - 1) * size, page * size);
+        for (const user of subset) {
+            await sendMessage(
+                `👤 *${user.username}*\n📧 ${user.email}\n🛡 Admin: ${user.is_admin ? "✅ Yes" : "❌ No"}`,
+                {
+                    parse_mode: 'Markdown',
+                    reply_markup: {
+                        inline_keyboard: [
+                            [
+                                { text: '✏️ Edit', callback_data: `edit_user:${user.id}` },
+                                { text: '🗑 Delete', callback_data: `delete_user:${user.id}` }
+                            ],
+                            [
+                                {
+                                    text: user.is_admin ? '❌ Remove Admin' : '✅ Make Admin',
+                                    callback_data: `toggle_admin:${user.id}`
+                                }
+                            ]
+                        ]
+                    }
+                }
+            );
+        }
 
-//         const navButtons = [];
-//         if (page > 1) navButtons.push({ text: '⬅️ Prev', callback_data: `users_page:${page - 1}` });
-//         if (page < totalPages) navButtons.push({ text: '➡️ Next', callback_data: `users_page:${page + 1}` });
+        const navButtons = [];
+        if (page > 1) navButtons.push({ text: '⬅️ Prev', callback_data: `users_page:${page - 1}` });
+        if (page < totalPages) navButtons.push({ text: '➡️ Next', callback_data: `users_page:${page + 1}` });
 
-//         await sendMessage(`📄 Page ${page} of ${totalPages}`, {
-//             reply_markup: { inline_keyboard: [navButtons] }
-//         });
-//     }
-// });
+        await sendMessage(`📄 Page ${page} of ${totalPages}`, {
+            reply_markup: { inline_keyboard: [navButtons] }
+        });
+    }
+});
 
 
 process.on('unhandledRejection', (reason, promise) => {
