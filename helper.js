@@ -118,6 +118,28 @@ async function getJiraProjects() {
     return await response.json();
 }
 
+async function getJiraProjectsWithNotification(chatId) {
+    try {
+        const projectIds = pool.query(`SELECT project_id
+                FROM project_subscriptions
+                WHERE chat_id = $1`, [chatId])
+        if (projectIds.length === 0) {
+            await sendMessageBot2(chatId, '⚠️ No projects found with enabled notification ')
+            return
+        }
+
+        const projects = getJiraProjects()
+
+        for (let i = 0; i < projects.length; i++) {
+            
+        }
+
+    } catch (err) {
+        console.error("Error loading notificatoin list", err)
+        await sendMessageBot2(chatId, '❌ Unable to download projects with notification enabled')
+    }
+}
+
 async function sendPaginatedProjects(chatId, projects, page) {
     const pageSize = 10;
     const start = page * pageSize;
@@ -318,6 +340,48 @@ const getUserNavigation = async (chatId) => {
     }
 }
 
+const showPage = async (chatId, page, users) => {
+    const size = 10; // 10 users per page
+    const totalPages = Math.ceil(users.length / size);
+
+    // Ensure page number is valid
+    if (page < 1 || page > totalPages) {
+        await sendMessage("❗ Invalid page.");
+        return;
+    }
+
+    const start = (page - 1) * size;
+    const end = start + size;
+    const subset = users.slice(start, end);
+
+    let messageText = `📄 *Users List* (Page ${page} of ${totalPages})\n\n`;
+    subset.forEach((user, i) => {
+        messageText += `${i + 1}. 👤 *${user.username}*\n📧 ${user.email}\n🛡 Admin: ${user.is_admin ? "✅ Yes" : "❌ No"}\n\n`;
+    });
+
+    // Inline buttons for selecting users (1 to 10), split into two rows
+    const inlineButtons = [
+        subset.slice(0, 5).map((user, idx) => ({ text: `${idx + 1}`, callback_data: `user_detail:${start + idx}` })),
+        subset.slice(5, 10).map((user, idx) => ({ text: `${idx + 6}`, callback_data: `user_detail:${start + idx + 5}` }))
+    ];
+
+    // Navigation buttons
+    const navButtons = [];
+    if (page > 1) {
+        navButtons.push({ text: '⬅️ Prev', callback_data: `users_page:${page - 1}` });
+    }
+    if (page < totalPages) {
+        navButtons.push({ text: '➡️ Next', callback_data: `users_page:${page + 1}` });
+    }
+
+    await sendMessageBot1(chatId, messageText, {
+        parse_mode: 'Markdown',
+        reply_markup: {
+            inline_keyboard: [...inlineButtons, navButtons.length ? navButtons : []] // Add user buttons and navigation buttons
+        }
+    });
+};
+
 
 
 module.exports = {
@@ -335,5 +399,6 @@ module.exports = {
     jiraRequest,
     getBoardColumns,
     saveUserNavigation,
-    getUserNavigation
+    getUserNavigation,
+    showPage
 };
