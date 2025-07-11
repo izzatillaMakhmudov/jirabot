@@ -6,11 +6,10 @@ const dotenv = require("dotenv");
 const fetch = require('node-fetch')
 dotenv.config();
 
-// process.env.NODE_TLS_REJECT_UNAUTHORIZED = "0";
-// const BOT_URL = process.env.BOT_URL;
+const messageIdCashe = {}
 
 const httpsAgent = new https.Agent({
-    rejectUnauthorized: false, // <- ignore SSL errors (temporary fix)
+    rejectUnauthorized: false, // 
 });
 
 const { JIRA_USERNAME, JIRA_PASSWORD, JIRA_BASE_URL } = process.env;
@@ -84,234 +83,26 @@ const sendVerificationCode = async (email, code) => {
 const isAdmin = async (chatId) => {
     if (!chatId) return false;
 
-    // Check hardcoded admin list first
-    if (ADMIN_IDS.includes(chatId)) {
-        return true;
-    }
-
-    // Then check from database
     try {
         const result = await pool.query(
             "SELECT is_admin FROM jira_users WHERE telegram_id = $1",
             [chatId]
         );
-        return result.rows.length > 0 && result.rows[0].is_admin === true;
+        // console.log("result is admin: ", result)
+
+        if (ADMIN_IDS.includes(chatId) || (result.rows.length > 0 && result.rows[0].is_admin === true)) {
+            console.log("Admin: ", true)
+            return true
+        } else return false
     } catch (err) {
         console.error("Error checking admin status:", err);
         return false;
     }
+
+
+
 };
 
-// Fetch data from jira
-async function getJiraProjects() {
-    const response = await fetch(`${JIRA_BASE_URL}/rest/api/2/project`, {
-        method: "GET",
-        headers: {
-            Authorization: "Basic " + Buffer.from(`${JIRA_USERNAME}:${JIRA_PASSWORD}`).toString("base64"),
-            "Content-Type": "application/json"
-        },
-        agent: new (require("https").Agent)({ rejectUnauthorized: false }) // ignore SSL cert error
-    });
-
-    if (!response.ok) throw new Error("Failed to fetch Jira projects");
-
-    return await response.json();
-}
-
-async function getJiraProjectsWithNotification(chatId) {
-    try {
-        const projectIds = pool.query(`SELECT project_id
-                FROM project_subscriptions
-                WHERE chat_id = $1`, [chatId])
-        if (projectIds.length === 0) {
-            await sendMessageBot2(chatId, '⚠️ No projects found with enabled notification ')
-            return
-        }
-
-        const projects = getJiraProjects()
-
-        for (let i = 0; i < projects.length; i++) {
-            
-        }
-
-    } catch (err) {
-        console.error("Error loading notificatoin list", err)
-        await sendMessageBot2(chatId, '❌ Unable to download projects with notification enabled')
-    }
-}
-
-async function sendPaginatedProjects(chatId, projects, page) {
-    const pageSize = 10;
-    const start = page * pageSize;
-    const end = start + pageSize;
-    const pageProjects = projects.slice(start, end);
-
-    let messageText = `📁 *Jira Projects* (Page ${page + 1})\n\n`;
-    pageProjects.forEach((p, i) => {
-        messageText += `${i + 1}. ${p.name}\n`;
-    });
-
-    const buttons = pageProjects.map((_, idx) => [
-        { text: `${idx + 1}`, callback_data: `project_detail:${start + idx}` }
-    ]);
-
-    const navigationButtons = [];
-    if (start > 0) navigationButtons.push({ text: "⬅️ Prev", callback_data: `project_page:${page - 1}` });
-    if (end < projects.length) navigationButtons.push({ text: "Next ➡️", callback_data: `project_page:${page + 1}` });
-
-    await sendMessageBot2(chatId, messageText, {
-        parse_mode: "Markdown",
-        reply_markup: {
-            inline_keyboard: [...buttons, navigationButtons.length ? navigationButtons : []]
-        }
-    });
-}
-
-async function getBoardsByProject(projectKeyOrId) {
-    const response = await fetch(`${JIRA_BASE_URL}/rest/agile/1.0/board?projectKeyOrId=${projectKeyOrId}`, {
-        method: "GET",
-        headers: {
-            Authorization: "Basic " + Buffer.from(`${JIRA_USERNAME}:${JIRA_PASSWORD}`).toString("base64"),
-            "Content-Type": "application/json"
-        },
-        agent: new (require("https").Agent)({ rejectUnauthorized: false }) // ignore SSL cert error
-    });
-
-    if (!response.ok) throw new Error("Failed to fetch boards");
-
-    const data = await response.json();
-    return data; // List of boards
-
-}
-
-async function jiraRequest(endpoint) {
-    const response = await fetch(`${JIRA_BASE_URL}${endpoint}`, {
-        headers: {
-            'Authorization': 'Basic ' + Buffer.from(`${JIRA_USERNAME}:${JIRA_PASSWORD}`).toString('base64'),
-            'Accept': 'application/json'
-        },
-        agent: new (require("https").Agent)({ rejectUnauthorized: false })
-    });
-
-    if (!response.ok) {
-        const errorText = await response.text();
-        throw new Error(`Jira request failed: ${response.status} ${errorText}`);
-    }
-
-    return await response.json();
-}
-
-async function getIssuesByBoardId(boardId) {
-    const allIssues = [];
-    let startAt = 0;
-    const maxResults = 1000; // 50 is the default and safe limit
-
-    while (true) {
-        const url = `${JIRA_BASE_URL}/rest/agile/1.0/board/${boardId}/issue?startAt=${startAt}&maxResults=${maxResults}`;
-        console.log("📡 Fetching:", url);
-
-        const response = await fetch(url, {
-            method: "GET",
-            headers: {
-                Authorization: "Basic " + Buffer.from(`${JIRA_USERNAME}:${JIRA_PASSWORD}`).toString("base64"),
-                "Content-Type": "application/json"
-            },
-            agent: new (require("https").Agent)({ rejectUnauthorized: false })
-        });
-
-        if (!response.ok) {
-            const errorBody = await response.text();
-            console.error("❌ Status:", response.status);
-            console.error("❌ Body:", errorBody);
-            throw new Error("Failed to fetch issues from board");
-        }
-
-        const data = await response.json();
-        allIssues.push(...data.issues);
-
-        if (data.issues.length < maxResults) break;
-        startAt += maxResults;
-    }
-
-    return { issues: allIssues };
-}
-
-async function fetchAndSortStatuses(projectId) {
-    const url = `${JIRA_BASE_URL}/rest/api/2/project/${projectId}/statuses`;
-    const response = await fetch(url, {
-        method: "GET",
-        headers: {
-            Authorization: "Basic " + Buffer.from(`${JIRA_USERNAME}:${JIRA_PASSWORD}`).toString("base64"),
-            "Content-Type": "application/json"
-        },
-        agent: new (require("https").Agent)({ rejectUnauthorized: false })
-    });
-
-    if (!response.ok) {
-        const errorBody = await response.text();
-        console.error("❌ Status:", response.status);
-        console.error("❌ Body:", errorBody);
-        throw new Error("Failed to fetch statuses");
-    }
-
-    const allStatusesResponse = await response.json();
-
-    // Flatten all status names
-    const statusMap = {};
-    allStatusesResponse.forEach(workflow => {
-        workflow.statuses.forEach(status => {
-            statusMap[status.name] = status;
-        });
-    });
-
-    const desiredStatusOrder = [
-        "Blocked",
-        "«Заблокировано»",
-        "Backlog",
-        "Отставание",
-        "Analitik",
-        "Designer",
-        "Ready for Developing",
-        "Selected for Development",
-        "Готово к разработке",
-        "In progress",
-        "В процессе",
-        "В работе",
-        "Rework",
-        "Переработка",
-        "QA",
-        "Done",
-        "Готово"
-    ];
-
-    const sortedStatuses = desiredStatusOrder
-        .filter(name => statusMap[name])
-        .map(name => statusMap[name]);
-
-    return sortedStatuses;
-}
-async function getBoardColumns(boardId) {
-    const response = await fetch(`${JIRA_BASE_URL}/rest/agile/1.0/board/${boardId}/configuration`, {
-        method: "GET",
-        headers: {
-            Authorization: "Basic " + Buffer.from(`${JIRA_USERNAME}:${JIRA_PASSWORD}`).toString("base64"),
-            "Content-Type": "application/json"
-        },
-        agent: new (require("https").Agent)({ rejectUnauthorized: false })
-    });
-
-    if (!response.ok) {
-        const errorText = await response.text();
-        throw new Error(`Failed to fetch board configuration: ${errorText}`);
-    }
-
-    const config = await response.json();
-
-    return config.columnConfig.columns.map(col => ({
-        name: col.name,
-        statuses: col.statuses.map(s => s.name)
-    }));
-}
 
 const saveUserNavigation = async (chatId, data) => {
     try {
@@ -340,47 +131,258 @@ const getUserNavigation = async (chatId) => {
     }
 }
 
-const showPage = async (chatId, page, users) => {
-    const size = 10; // 10 users per page
-    const totalPages = Math.ceil(users.length / size);
+const showPage = async (chatId, page, components, totalPages) => {
+    const size = 10;
+    const startIndex = (page - 1) * size;
+    const endIndex = startIndex + size;
+    const currentComponents = components.slice(startIndex, endIndex);
 
-    // Ensure page number is valid
-    if (page < 1 || page > totalPages) {
-        await sendMessage("❗ Invalid page.");
+    let messageText = `📋 *Components for Main Board (Page ${page} of ${totalPages})*\n\n`;
+    currentComponents.forEach((component, i) => {
+        messageText += `${startIndex + i + 1}. *${component.name}*\n`;
+    });
+
+    const inlineButtons = [];
+    const buttonRow1 = currentComponents.slice(0, 5).map((_, i) => ({
+        text: `${startIndex + i + 1}`,
+        callback_data: `component_detail:${startIndex + i}`
+    }));
+    const buttonRow2 = currentComponents.slice(5, 10).map((_, i) => ({
+        text: `${startIndex + 5 + i + 1}`,
+        callback_data: `component_detail:${startIndex + 5 + i}`
+    }));
+
+    inlineButtons.push(buttonRow1);
+    if (buttonRow2.length > 0) inlineButtons.push(buttonRow2);
+
+    const navButtons = [];
+    if (page > 1) {
+        navButtons.push({ text: '⬅️ Prev', callback_data: `projects_page:${page - 1}` });
+    }
+    if (page < totalPages) {
+        navButtons.push({ text: '➡️ Next', callback_data: `projects_page:${page + 1}` });
+    }
+
+    await sendMessageBot2(chatId, messageText, {
+        parse_mode: 'Markdown',
+        reply_markup: {
+            inline_keyboard: [...inlineButtons, navButtons.length ? navButtons : []]
+        }
+    });
+}
+
+async function getComponentsFromMainBoard(projectId) {
+    const response = await fetch(`${JIRA_BASE_URL}/rest/api/2/project/${projectId}/components`, {
+        method: 'GET',
+        headers: {
+            Authorization: `Basic ${Buffer.from(`${JIRA_USERNAME}:${JIRA_PASSWORD}`).toString('base64')}`,
+            'Content-Type': 'application/json',
+        },
+        agent: new (require("https").Agent)({ rejectUnauthorized: false })
+    });
+
+    if (!response.ok) {
+        console.error("Failed to fetch components");
+        return [];
+    }
+
+    return await response.json();
+}
+async function getIssuesByComponentId(componentId, startAt = 0, allIssues = []) {
+    const jql = `component = ${componentId}`;
+    const url = `${JIRA_BASE_URL}/rest/api/2/search?jql=${encodeURIComponent(jql)}&fields=summary,issuetype,status&startAt=${startAt}&maxResults=50`;
+
+    try {
+        const response = await fetch(url, {
+            method: 'GET',
+            headers: {
+                Authorization: `Basic ${Buffer.from(`${JIRA_USERNAME}:${JIRA_PASSWORD}`).toString('base64')}`,
+                'Content-Type': 'application/json',
+            },
+            agent: new (require("https").Agent)({ rejectUnauthorized: false })
+        });
+
+        if (response.status === 404) {
+            console.error("Component not found.");
+            return [];
+        } else if (!response.ok) {
+            console.error(`Error: ${response.status} - ${response.statusText}`);
+            return [];
+        }
+
+        const data = await response.json();
+        allIssues = allIssues.concat(data.issues);
+
+        if (data.total > startAt + 50) {
+            return await getIssuesByComponentId(componentId, startAt + 50, allIssues);
+        }
+
+        return allIssues;
+    } catch (error) {
+        console.error('Error fetching issues:', error);
+        return [];
+    }
+}
+
+async function groupIssuesByStatus(issues) {
+    const groupedByStatus = issues.reduce((acc, issue) => {
+        const statusName = issue.fields?.status?.name || 'Unknown';
+        if (!acc[statusName]) acc[statusName] = [];
+        acc[statusName].push(issue);
+        return acc;
+    }, {});
+
+    return groupedByStatus;
+}
+
+async function sendPaginatedStatusNames(groupedStatuses, chatId, page = 1, componentName, componentId) {
+    try {
+        const statusNames = Object.keys(groupedStatuses);
+        const statusesPerPage = 5;
+        const totalPages = Math.ceil(statusNames.length / statusesPerPage);
+
+        const currentStatusNames = statusNames.slice((page - 1) * statusesPerPage, page * statusesPerPage);
+
+        let message = `🗂 *Statuses for ${componentName} (Page ${page} of ${totalPages})*\n\n`;
+        currentStatusNames.forEach((status, idx) => {
+            message += `*${idx + 1}. ${status}* — ${groupedStatuses[status].length} issues\n`;
+        });
+
+        const inlineKeyboard = [];
+
+        const row1 = currentStatusNames.slice(0, 5).map((status, idx) => ({
+            text: `${idx + 1}`,
+            callback_data: `status_${status}`
+        }));
+
+        if (row1.length > 0) inlineKeyboard.push(row1);
+
+        const navButtons = [];
+        if (page < totalPages) {
+            navButtons.push({ text: '➡️ Next', callback_data: `next_status_page:${page + 1}` });
+        }
+        if (page > 1) {
+            navButtons.push({ text: '⬅️ Prev', callback_data: `prev_status_page:${page - 1}` });
+        }
+
+        if (navButtons.length > 0) {
+            inlineKeyboard.push(navButtons);
+        }
+
+        const isSubscribed = await pool.query(
+            "SELECT 1 FROM project_subscriptions WHERE chat_id = $1 AND project_id = $2",
+            [chatId, componentId]
+        );
+
+        const notificationButtonText = isSubscribed.rowCount > 0 ? '🔕 Turn Off Notifications' : '🔔 Turn On Notifications';
+        const notificationButton = { text: notificationButtonText, callback_data: `toggle_notify:${componentId}` };
+
+        inlineKeyboard.push([notificationButton]);
+
+        inlineKeyboard.push([{ text: '⬅️ Back', callback_data: 'back' }]);
+
+        await sendMessageToUser(message, inlineKeyboard, chatId);
+
+    } catch (error) {
+        console.error("Error while sending paginated status names:", error);
+        await sendMessageToUser("❌ An error occurred while fetching statuses. Please try again.", chatId);
+    }
+}
+
+async function sendIssuesForStatus(statusName, chatId, groupedStatuses) {
+    const issues = groupedStatuses[statusName];
+
+    const inlineKeyboard = [
+        [{ text: '⬅️ Back', callback_data: 'back' }]
+    ];
+
+    if (!issues || issues.length === 0) {
+        await sendMessageToUser(`No issues found for status: ${statusName}`, inlineKeyboard, chatId);
         return;
     }
 
-    const start = (page - 1) * size;
-    const end = start + size;
-    const subset = users.slice(start, end);
-
-    let messageText = `📄 *Users List* (Page ${page} of ${totalPages})\n\n`;
-    subset.forEach((user, i) => {
-        messageText += `${i + 1}. 👤 *${user.username}*\n📧 ${user.email}\n🛡 Admin: ${user.is_admin ? "✅ Yes" : "❌ No"}\n\n`;
+    let message = `🔎 *Issues for Status: ${statusName}*\n\n`;
+    issues.forEach((issue, idx) => {
+        message += `${idx + 1}. ${issue.fields.summary} - ${issue.key}\n`;
     });
 
-    // Inline buttons for selecting users (1 to 10), split into two rows
-    const inlineButtons = [
-        subset.slice(0, 5).map((user, idx) => ({ text: `${idx + 1}`, callback_data: `user_detail:${start + idx}` })),
-        subset.slice(5, 10).map((user, idx) => ({ text: `${idx + 6}`, callback_data: `user_detail:${start + idx + 5}` }))
-    ];
 
-    // Navigation buttons
-    const navButtons = [];
-    if (page > 1) {
-        navButtons.push({ text: '⬅️ Prev', callback_data: `users_page:${page - 1}` });
-    }
-    if (page < totalPages) {
-        navButtons.push({ text: '➡️ Next', callback_data: `users_page:${page + 1}` });
-    }
 
-    await sendMessageBot1(chatId, messageText, {
+    await sendMessageToUser(message, inlineKeyboard, chatId);
+}
+
+async function sendMessageToUser(message, inlineKeyboard, chatId) {
+    const sentMessage = await bot2.sendMessage(chatId, message, {
         parse_mode: 'Markdown',
         reply_markup: {
-            inline_keyboard: [...inlineButtons, navButtons.length ? navButtons : []] // Add user buttons and navigation buttons
+            inline_keyboard: inlineKeyboard
         }
     });
-};
+
+    const messageId = sentMessage.message_id
+    messageIdCashe[chatId] = {
+        messageId: messageId,
+        message: message,
+        inlineKeyboard: inlineKeyboard,
+        chatId: chatId
+    }
+}
+
+async function editUserMessage(message, inlineKeyboard, chatId, messageId) {
+
+    try {
+        if (!messageId) {
+            console.error("Message ID is undefined or invalid.");
+            return;
+        }
+
+        if (!Array.isArray(inlineKeyboard) || !inlineKeyboard.every(row => Array.isArray(row))) {
+            console.error("Invalid inlineKeyboard format. Expected an array of arrays:", inlineKeyboard);
+            await bot2.sendMessage(chatId, "❌ Invalid keyboard format. Please try again.");
+            return;
+        }
+
+        const validatedKeyboard = inlineKeyboard.map(row =>
+            row.filter(button => button.text && (button.callback_data || button.url))
+        );
+
+        if (validatedKeyboard.every(row => row.length === 0)) {
+            console.error("No valid buttons in inlineKeyboard:", inlineKeyboard);
+            await bot2.sendMessage(chatId, "❌ No valid buttons provided. Please try again.");
+            return;
+        }
+
+        const sentMessage = await bot2.editMessageText(message, {
+            chat_id: chatId,
+            message_id: messageId,
+            parse_mode: 'Markdown',
+            reply_markup: {
+                inline_keyboard: validatedKeyboard
+            }
+        });
+
+        messageId = sentMessage.message_id
+        messageIdCashe[chatId] = {
+            messageId: messageId,
+            message: message,
+            inlineKeyboard: inlineKeyboard,
+            chatId: chatId
+        }
+    } catch (err) {
+        console.error("Error editing message:", err);
+        await bot2.sendMessage("❌ An error occurred while updating the message. Please try again later.");
+    }
+}
+
+async function filterComponents(components, dataRows) {
+    const projectIdsFromDb = dataRows.map(row => row.project_id);
+
+    const filteredComponents = components.filter(component =>
+        projectIdsFromDb.includes(parseInt(component.id))
+    );
+
+    return filteredComponents;
+}
 
 
 
@@ -392,13 +394,15 @@ module.exports = {
     bot2,
     sendMessageBot1,
     sendMessageBot2,
-    getJiraProjects,
-    getBoardsByProject,
-    getIssuesByBoardId,
-    fetchAndSortStatuses,
-    jiraRequest,
-    getBoardColumns,
     saveUserNavigation,
     getUserNavigation,
-    showPage
+    showPage,
+    getComponentsFromMainBoard,
+    getIssuesByComponentId,
+    groupIssuesByStatus,
+    sendPaginatedStatusNames,
+    sendIssuesForStatus,
+    messageIdCashe,
+    editUserMessage,
+    filterComponents
 };

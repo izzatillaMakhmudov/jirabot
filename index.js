@@ -10,14 +10,17 @@ const {
     bot2,
     sendMessageBot1,
     sendMessageBot2,
-    getJiraProjects,
-    getBoardsByProject,
-    getIssuesByBoardId,
-    fetchAndSortStatuses,
-    jiraRequest,
     saveUserNavigation,
     getUserNavigation,
-    showPage
+    showPage,
+    getComponentsFromMainBoard,
+    getIssuesByComponentId,
+    groupIssuesByStatus,
+    sendPaginatedStatusNames,
+    sendIssuesForStatus,
+    messageIdCashe,
+    editUserMessage,
+    filterComponents
 } = require('./helper');
 
 
@@ -28,16 +31,10 @@ app.use(bodyParser.json())
 
 // States
 const projectCache = {};
-const emojiNumbers = ['1️⃣', '2️⃣', '3️⃣', '4️⃣', '5️⃣', '6️⃣', '7️⃣', '8️⃣', '9️⃣', '🔟'];
-const statusLookup = {};
 const userStates = {}
 const userPages = {}
-const boardSelectionCache = {};
-const notificationCashe = {}
-
-
-
-
+const issueCashe = {}
+const componentNameCashe = {}
 
 // for test
 app.get("/", async (req, res) => {
@@ -48,70 +45,17 @@ app.get("/", async (req, res) => {
 
 // for test
 // Get users from db
-app.get("/users", async (req, res) => {
-    try {
-        const result = await pool.query("SELECT * FROM jira_users");
-        res.send(result.rows).json(result.rows);
-    } catch (err) {
-        console.error("DB error: ", err.message);
-        res.status(500).send("Server error");
-    }
-});
+// app.get("/users", async (req, res) => {
+//     try {
+//         const result = await pool.query("SELECT * FROM jira_users");
+//         res.send(result.rows).json(result.rows);
+//     } catch (err) {
+//         console.error("DB error: ", err.message);
+//         res.status(500).send("Server error");
+//     }
+// });
 
 // jira API 
-// app.post("/notification", async (req, res) => {
-//     const event = req.body;
-
-//     if (!event || !event.issue || !event.issue.fields) {
-//         return res.sendStatus(200); // Ignore invalid events
-//     }
-
-//     const projectId = event.issue.fields.project.id;
-//     const issueKey = event.issue.key;
-//     const summary = event.issue.fields.summary;
-//     const changelog = event.changelog || {};
-//     const user = event.user?.displayName || 'Unknown user';
-
-//     // Determine if the event includes a comment
-//     const issueComment = event.comment?.body || null;
-//     if (event.webhookEvent === 'jira:issue_updated' && event.issue_event_type_name === 'issue_comment_edited') {
-//         const commentText = `💬 *Comment Updated*:\n${issueComment}`;
-//         await sendCommentNotification(projectId, issueKey, summary, commentText);
-//         return res.sendStatus(200);
-//     } else if (event.webhookEvent === 'jira:issue_updated' && event.issue_event_type_name === 'issue_commented') {
-//         const commentText = `💬 *New Comment Added*:\n${issueComment}`;
-//         await sendCommentNotification(projectId, issueKey, summary, commentText);
-//         return res.sendStatus(200);
-//     }
-
-//     // Fetch subscribers for the project
-//     const rows = await pool.query(
-//         `SELECT chat_id FROM project_subscriptions WHERE project_id = $1`,
-//         [projectId]
-//     );
-
-//     if (rows.rowCount === 0) return res.sendStatus(200); // No subscribers
-
-//     // Prepare the change text for updates
-//     const changeText = changelog.items?.map(item => {
-//         return `• *${item.field}*: "${item.fromString || '–'}" → "${item.toString || '–'}"`;
-//     }).join('\n') || '_No specific changes listed._';
-
-//     // Prepare the base message
-//     let message = `🛠 *${user}* updated issue *${issueKey}*\n📝 ${summary}\n\n${changeText}`;
-
-//     // If there's a comment, include it in the message
-//     if (issueComment) {
-//         message += `\n💬 *Comment Added*:\n${issueComment}`;
-//     }
-
-//     // Send the message to all subscribers
-//     for (const { chat_id } of rows.rows) {
-//         await bot2.sendMessage(chat_id, message, { parse_mode: 'Markdown' });
-//     }
-
-//     res.sendStatus(200);
-// });
 app.post("/notification", async (req, res) => {
     const event = req.body;
 
@@ -119,115 +63,58 @@ app.post("/notification", async (req, res) => {
         return res.sendStatus(200); // Ignore invalid events
     }
 
-    const projectId = event.issue.fields.project.id;
-    const issueKey = event.issue.key;
-    const summary = event.issue.fields.summary;
+    const projectId = event.issue?.fields?.components[0]?.id;
+    const issueKey = event.issue?.key;
+    const summary = event.issue?.fields?.summary;
     const changelog = event.changelog || {};
     const user = event.user?.displayName || 'Unknown user';
-    const projectName = event?.issue?.fields?.project?.name
-
+    const projectName = event?.issue?.fields?.components[0]?.name
+    const prId = event.issue?.fields?.project?.id
+    console.log("Project Id: ", prId)
+    console.log("Component Id: ", projectId)
     const issueComment = event.comment?.body || null;
 
     let message = `📋 *Project Name:* ${projectName}\n\n`
-    if (event.webhookEvent === 'jira:issue_updated') {
-        if (event.issue_event_type_name === 'issue_commented') {
-            const commentText = `💬 *${user} Added New Comment*:\n${issueComment}`;
-            await sendCommentNotification(projectId, issueKey, summary, commentText, message);
-            return res.sendStatus(200);
-        } else if (event.issue_event_type_name === 'issue_comment_edited') {
-            const commentText = `💬 *${user} Updated Comment*:\n${issueComment}`;
-            await sendCommentNotification(projectId, issueKey, summary, commentText, message);
-            return res.sendStatus(200);
-        }
-    }
 
-    if (event.webhookEvent === 'jira:issue_updated' && !event.issue_event_type_name.includes('issue_comment')) {
-        const rows = await pool.query(
-            `SELECT chat_id FROM project_subscriptions WHERE project_id = $1`,
-            [projectId]
-        );
-
-        if (rows.rowCount === 0) return res.sendStatus(200); // No subscribers
-
-        const changeText = changelog.items?.map(item => {
-            return `• *${item.field}*: "${item.fromString || '–'}" → "${item.toString || '–'}"`;
-        }).join('\n') || '_No specific changes listed._';
-
-        message += `🛠 *${user}* updated issue *${issueKey}*\n📝 ${summary}\n\n${changeText}`;
-
-        if (issueComment) {
-            message += `\n💬 *Comment Added*:\n${issueComment}`;
+    if (event.issue?.fields?.project?.id === process.env.MB_ID) {
+        if (event.webhookEvent === 'jira:issue_updated') {
+            if (event.issue_event_type_name === 'issue_commented') {
+                const commentText = `💬 *${user} Added New Comment*:\n${issueComment}`;
+                await sendCommentNotification(projectId, issueKey, summary, commentText, message);
+                return res.sendStatus(200);
+            } else if (event.issue_event_type_name === 'issue_comment_edited') {
+                const commentText = `💬 *${user} Updated Comment*:\n${issueComment}`;
+                await sendCommentNotification(projectId, issueKey, summary, commentText, message);
+                return res.sendStatus(200);
+            }
         }
 
-        for (const { chat_id } of rows.rows) {
-            await bot2.sendMessage(chat_id, message, { parse_mode: 'Markdown' });
-        }
-    }
-
-    res.sendStatus(200);
-});
-
-/*
-app.post("/notification", async (req, res) => {
-    const event = req.body;
-
-    if (!event || !event.issue || !event.issue.fields) {
-        return res.sendStatus(200); 
-    }
-
-    const projectId = event.issue.fields.project.id;
-    const issueKey = event.issue.key;
-    const summary = event.issue.fields.summary;
-    const changelog = event.changelog || {};
-    const user = event.user?.displayName || 'Unknown user';
-
-    const issueComment = event.comment?.body || null;
-
-    if (event.webhookEvent === 'jira:issue_updated') {
-        if (event.issue_event_type_name === 'issue_commented') {
-            const commentText = `💬 *New Comment Added*:\n${issueComment}`;
-            await sendCommentNotification(projectId, issueKey, summary, commentText);
-            return res.sendStatus(200);
-        } else if (event.issue_event_type_name === 'issue_comment_edited') {
-            const commentText = `💬 *Comment Updated*:\n${issueComment}`;
-            await sendCommentNotification(projectId, issueKey, summary, commentText);
-            return res.sendStatus(200); 
-        }
-    }
-
-    if (event.webhookEvent === 'jira:issue_updated' && !event.issue_event_type_name.includes('issue_comment')) {
-        try {
-            const [rows] = await pool.query(
-                `SELECT chat_id FROM project_subscriptions WHERE project_id = ?`,
+        if (event.webhookEvent === 'jira:issue_updated' && !event.issue_event_type_name.includes('issue_comment')) {
+            const rows = await pool.query(
+                `SELECT chat_id FROM project_subscriptions WHERE project_id = $1`,
                 [projectId]
             );
 
-            if (rows.length === 0) return res.sendStatus(200); // No subscribers
+            if (rows.rowCount === 0) return res.sendStatus(200); // No subscribers
 
             const changeText = changelog.items?.map(item => {
                 return `• *${item.field}*: "${item.fromString || '–'}" → "${item.toString || '–'}"`;
             }).join('\n') || '_No specific changes listed._';
-            
-            let message = `🛠 *${user}* updated issue *${issueKey}*\n📝 ${summary}\n\n${changeText}`;
+
+            message += `🛠 *${user}* updated issue *${issueKey}*\n📝 ${summary}\n\n${changeText}`;
 
             if (issueComment) {
                 message += `\n💬 *Comment Added*:\n${issueComment}`;
             }
 
-            for (const { chat_id } of rows) {
+            for (const { chat_id } of rows.rows) {
                 await bot2.sendMessage(chat_id, message, { parse_mode: 'Markdown' });
             }
-
-            return res.sendStatus(200); 
-
-        } catch (err) {
-            console.error("Error handling webhook notification:", err);
-            return res.status(500).send("Server error");
         }
-    }
 
+    }
     res.sendStatus(200);
-});*/
+});
 
 const sendCommentNotification = async (projectId, issueKey, summary, commentText, projectName) => {
     const rows = await pool.query(
@@ -241,10 +128,6 @@ const sendCommentNotification = async (projectId, issueKey, summary, commentText
         await bot2.sendMessage(chat_id, message, { parse_mode: 'Markdown' });
     }
 };
-
-
-
-
 
 app.post("/webhook-jira", async (req, res) => {
     const changeLog = req.body?.changelog
@@ -434,17 +317,6 @@ ${issueSummary}
 // ============= Managers bot =============
 const navigationStack = {}; // key: chatId, value: array of previous messages
 
-async function pushAndSend(bot, chatId, text, options = {}) {
-    const msg = await bot.sendMessage(chatId, text, options);
-    if (!navigationStack[chatId]) navigationStack[chatId] = [];
-    navigationStack[chatId].push({
-        message_id: msg.message_id,
-        text,
-        reply_markup: options.reply_markup || {}
-    });
-    return msg;
-}
-
 bot2.on('message', async (msg) => {
     const chatId = msg.chat.id;
     const text = msg.text?.trim();
@@ -452,34 +324,54 @@ bot2.on('message', async (msg) => {
 
     const sendMessage = (text, options = {}) => bot2.sendMessage(chatId, text, options);
 
-    const MainMenuKeyboard = async () => {
+    async function checkIfManager(chatId) {
+        const result = await pool.query("SELECT 1 FROM managers WHERE telegram_chat_id = $1", [chatId]);
+        return result.rowCount > 0;
+    }
+
+    const MainMenuKeyboard = async (chatId) => {
         const admin = await isAdmin(chatId);
+        const isManager = await checkIfManager(chatId); // Check if user is a manager
+        let inlineKeyboard = [];
+        console.log(admin)
+        if (admin) {
+            inlineKeyboard = [
+                [{ text: 'Projects List' }, { text: 'Notifications List' }],
+                [{ text: '📋 Managers List' }, { text: "Add manager" }]
+            ];
+        } else if (isManager) {
+            inlineKeyboard = [
+                [{ text: 'Projects List' }, { text: 'Notifications List' }]
+            ];
+        } else {
+            inlineKeyboard = [
+                [{ text: 'Projects List' }, { text: 'Notifications List' }],
+                [{ text: 'Ask for access' }]
+            ];
+        }
+
         return {
             reply_markup: {
-                keyboard: admin
-                    ? [
-                        [{ text: 'Ask for access' }, { text: 'Projects List' }, { text: 'Notifications List' }],
-                        [{ text: '📋 Managers List' }, { text: "Add manager" }]
-                    ]
-                    : [
-                        [{ text: 'Ask for access' }, { text: 'Projects List' }, { text: 'Notifications List' }],
-                    ],
+                keyboard: inlineKeyboard,
                 resize_keyboard: true,
                 one_time_keyboard: false
             }
         };
     };
 
-    const userNavigation = await getUserNavigation(chatId)
-
-    // Cancel handler
-    if (text === '/cancel') {
-        await saveUserNavigation(chatId, [])
-        await sendMessage("❌ Cancelled. Back to main menu.", await MainMenuKeyboard());
+    // Handle "Ask for access" message
+    if (text === 'Ask for access') {
+        await sendMessage('📲 To get access, please share your phone number:', {
+            reply_markup: {
+                keyboard: [[{ text: '📤 Share phone number', request_contact: true }], [{ text: '/cancel' }]],
+                resize_keyboard: true,
+                one_time_keyboard: true
+            }
+        });
         return;
     }
 
-    // Contact handler
+    // Handle contact sharing
     if (contact && contact.phone_number) {
         const phone = '+' + contact.phone_number;
         try {
@@ -489,68 +381,66 @@ bot2.on('message', async (msg) => {
             );
 
             if (result.rowCount === 0) {
-                await sendMessage(`⚠️ Your phone number is not recognized. Please ask an admin to register you.`, await MainMenuKeyboard());
+                await sendMessage(`⚠️ Your phone number is not recognized. Please ask an admin to register you.`, await MainMenuKeyboard(chatId));
             } else {
-                await sendMessage(`✅ Thank you! You’ve been granted access.`, await MainMenuKeyboard());
+                await sendMessage(`✅ Thank you! You’ve been granted access.`, await MainMenuKeyboard(chatId));
             }
         } catch (err) {
             console.error("❌ Error updating Telegram ID:", err);
-            await sendMessage("❌ Failed to link your phone number. Please try again later.");
+            await sendMessage("❌ Failed to link your phone number. Please try again later.", await MainMenuKeyboard(chatId));
         }
         return;
     }
 
-    // Start
+    // Handle the '/cancel' command
+    if (text === '/cancel') {
+        await saveUserNavigation(chatId, []);
+        await sendMessage("❌ Cancelled. Back to main menu.", await MainMenuKeyboard(chatId));
+        return;
+    }
+
     if (text === '/start') {
-        const navigationStack = [{ step: 'awaiting_managers_phone', data: {} }];
         await saveUserNavigation(chatId, navigationStack);
         await sendMessage("👋 Welcome! This bot is connected to your Jira software.", await MainMenuKeyboard());
         return;
     }
 
-    // Add manager
-    if (text === 'Add manager' || text === '/add_manager') {
-        const navigationStack = await getUserNavigation(chatId) || [];
-        navigationStack.push({ step: 'awaiting_managers_phone', data: {} });
-        await saveUserNavigation(chatId, navigationStack);
+    // Handle 'Projects List'
+    if (text === 'Projects List') {
+        if (await checkIfManager(chatId)) {
+            try {
+                const components = await getComponentsFromMainBoard(process.env.MB_ID);
+                if (components.length === 0) {
+                    await sendMessage("📭 No components found for this project.");
+                    return;
+                }
 
+                projectCache[chatId] = components
+                console.log("Project cashe: ", projectCache[chatId])
 
-        await sendMessage("📱 Please enter the manager’s *phone number*:", {
-            parse_mode: 'Markdown',
-            reply_markup: {
-                keyboard: [[{ text: '/cancel' }]],
-                resize_keyboard: true,
-                one_time_keyboard: true
+                const size = 10;
+                const totalPages = Math.ceil(components.length / size);
+                let currentPage = 1;
+
+                let navigationStack = await getUserNavigation(chatId) || [];
+                if (!Array.isArray(navigationStack)) {
+                    navigationStack = [];
+                }
+                navigationStack.push({ step: 'projects_list', data: { page: currentPage } });
+                await saveUserNavigation(chatId, navigationStack);
+
+                await showPage(chatId, currentPage, components, totalPages);
+            } catch (err) {
+                console.error("Failed to load components from Main board", err);
+                await sendMessage("❌ Failed to fetch projects from Jira", await MainMenuKeyboard(chatId));
             }
-        });
+        }
+        else {
+            sendMessage("🚫 You are not authorized to use this command.")
+        }
         return;
     }
 
-
-    // Handle 'awaiting_managers_phone' step
-    if (userNavigation && userNavigation[userNavigation.length - 1]?.step === 'awaiting_managers_phone') {
-        const phoneNumber = text;
-        if (!/^\+?\d{7,15}$/.test(phoneNumber)) {
-            await sendMessage("❗ Invalid phone number. Please enter a valid one (e.g., +998901234567):");
-            return;
-        }
-
-        try {
-            await pool.query(`INSERT INTO managers (phone_number) VALUES ($1)`, [phoneNumber]);
-            await sendMessage("✅ Phone number has been saved to the database.", await MainMenuKeyboard());
-        } catch (err) {
-            console.error("DB save error:", err);
-            await sendMessage("❌ Error saving to the database.");
-        }
-
-        // Move to the next step
-        const newNavigationStack = userNavigation.slice();
-        newNavigationStack.push({ step: 'completed', data: { phone: phoneNumber } });
-        await saveUserNavigation(chatId, navigationStack) //save the updated navigation
-        return;
-    }
-
-    // Managers list??
     if (text === '/managers_list' || text === '📋 Managers List') {
         const admin = await isAdmin(chatId);
         if (admin) {
@@ -584,10 +474,6 @@ bot2.on('message', async (msg) => {
                     );
                 }
 
-                const navigationStack = await getUserNavigation(chatId) || []
-                navigationStack.push({ step: 'managers_list', data: {} }) //update the last stack
-                await saveUserNavigation(chatId, navigationStack) //saving to the db
-
             } catch (err) {
                 console.error("❌ Error fetching managers:", err);
                 await sendMessage("⚠️ Error retrieving managers from the database.");
@@ -599,315 +485,422 @@ bot2.on('message', async (msg) => {
     }
 
 
-    // Ask for access??
-    if (text === 'Ask for access') {
+    // Add manager
+    if (text === 'Add manager' || text === '/add_manager') {
+        let navigationStack = await getUserNavigation(chatId) || [];
+        console.log("navigationStack: ", navigationStack)
+        if (!Array.isArray(navigationStack)) {
+            console.error("Navigation stack is not an array, resetting to an empty array.");
+            navigationStack = [];
+        }
+        navigationStack.push({ step: 'awaiting_managers_phone', data: {} });
+        await saveUserNavigation(chatId, navigationStack);
 
-        const navigationStack = await getUserNavigation(chatId) || []
-        navigationStack.push({ step: 'ask_for_access', data: {} })
-        await saveUserNavigation(chatId, navigationStack)
 
-
-        await sendMessage('📲 To get access, please share your phone number:', {
+        await sendMessage("📱 Please enter the manager’s *phone number*:", {
+            parse_mode: 'Markdown',
             reply_markup: {
-                keyboard: [[{ text: '📤 Share phone number', request_contact: true }], [{ text: '/cancel' }]],
+                keyboard: [[{ text: '/cancel' }]],
                 resize_keyboard: true,
                 one_time_keyboard: true
             }
         });
         return;
     }
+    const userNavigation = await getUserNavigation(chatId)
 
-    // Projects List??
-    if (text === 'Projects List') {
-        try {
-            const all = await getJiraProjects();
-            if (!Array.isArray(all) || all.length === 0) {
-                await sendMessage("⚠️ No projects found.");
-                return;
-            }
-
-            const page = 1;
-            const size = 10;
-            const totalPages = Math.ceil(all.length / size);
-            const subset = all.slice(0, size);
-
-            projectCache[chatId] = all;
-            setTimeout(() => delete projectCache[chatId], 5 * 60 * 1000); // Clear cache after 5 mins
-
-            const messageText = [
-                `📋 *Jira Projects (${page}/${totalPages})*`,
-                ...subset.map((p, i) => `${i + 1}. ${p.name}`)
-            ].join('\n');
-
-            const keyboard = [];
-            for (let i = 0; i < subset.length; i += 5) {
-                keyboard.push(
-                    subset.slice(i, i + 5).map((project, j) => {
-                        const localIndex = i + j;
-                        const globalIndex = (page - 1) * size + localIndex;
-                        const emoji = emojiNumbers[localIndex] || `${localIndex + 1}`;
-                        return {
-                            text: emoji,
-                            callback_data: `project_detail:${globalIndex}`
-                        };
-                    })
-                );
-            }
-
-
-
-            if (totalPages > 1) {
-                keyboard.push([{ text: '➡️', callback_data: `project_page:${page + 1}` }]);
-            }
-
-            await sendMessage(messageText, {
-                parse_mode: 'Markdown',
-                reply_markup: { inline_keyboard: keyboard }
-            });
-
-            const navigationStack = await getUserNavigation(chatId) || [];
-            navigationStack.push({ step: 'projects_list', data: {} });  // Add this step to the stack
-            await saveUserNavigation(chatId, navigationStack);  // Save stack to DB
-
-        } catch (err) {
-            console.error('Error in /show_projects_list:', err);
-            await sendMessage('❌ Failed to load projects from Jira.');
-        }
-        return;
-    }
-
-    if (text === 'Notifications List') {
-        try {
-            // Fetch projects from Jira
-            const projects = await getJiraProjects();
-
-            if (projects.length === 0) {
-                await sendMessage("📭 You are not subscribed to any projects.");
-                return;
-            }
-
-            // Get the user's subscriptions from the database
-            const subscribedProjectsResult = await pool.query(
-                `SELECT project_id FROM project_subscriptions WHERE chat_id = $1`,
-                [chatId]
-            );
-
-
-            const subscribedProjectIds = subscribedProjectsResult.rows.map(row => row.project_id);
-
-
-            // Filter the projects to only include those with notifications enabled (i.e., project_id exists in the subscription table)
-            const subscribedProjects = projects.filter(project =>
-                subscribedProjectIds.map(id => Number(id)).includes(Number(project.id))
-            );
-
-            projectCache[chatId] = subscribedProjects
-
-            console.log(subscribedProjects)
-            if (subscribedProjects.length === 0) {
-                await sendMessage("📭 You have no projects with notifications enabled.");
-                return;
-            }
-
-            const size = 10;
-            userPages[chatId] = subscribedProjects; // Store subscribed projects for pagination
-            const totalPages = Math.ceil(subscribedProjects.length / size);
-
-            // Function to show a page of projects with notifications enabled
-            const showPage = async (page) => {
-                if (page < 1 || page > totalPages) {
-                    await sendMessage("❗ Invalid page.");
-                    return;
-                }
-
-                const start = (page - 1) * size;
-                const end = start + size;
-                const subset = subscribedProjects.slice(start, end);
-
-                let messageText = `📄 *Projects with Notifications Enabled* (Page ${page} of ${totalPages})\n\n`;
-                subset.forEach((project, i) => {
-                    messageText += `${i + 1}. *${project.name}*\n`;
-                });
-
-                // Inline buttons for selecting projects (1 to 10), split into two rows
-                const inlineButtons = [
-                    subset.slice(0, 5).map((project, idx) => ({ text: `${idx + 1}`, callback_data: `notification_detail:${start + idx}` })),
-                    subset.slice(5, 10).map((project, idx) => ({ text: `${idx + 6}`, callback_data: `notification_detail:${start + idx + 5}` }))
-                ];
-
-                // Navigation buttons
-                const navButtons = [];
-                if (page > 1) navButtons.push({ text: '⬅️ Prev', callback_data: `notifications_page:${page - 1}` });
-                if (page < totalPages) navButtons.push({ text: '➡️ Next', callback_data: `notifications_page:${page + 1}` });
-
-                await sendMessage(messageText, {
-                    parse_mode: 'Markdown',
-                    reply_markup: {
-                        inline_keyboard: [...inlineButtons, navButtons.length ? navButtons : []] // Add project buttons and navigation buttons
-                    }
-                });
-
-                const navigationStack = await getUserNavigation(chatId) || [];
-                navigationStack.push({ step: 'notifications_list', data: {} });  // Add this step to the stack
-                await saveUserNavigation(chatId, navigationStack);  // Save stack to DB
-            };
-
-            // Display the first page
-            await showPage(1);
-        } catch (err) {
-            console.error("Error fetching projects or subscriptions:", err);
-            await sendMessage("❌ Failed to load projects with notifications.");
-        }
-    }
-
-    if (text === '⬅️ Back') {
-        const navigationStack = await getUserNavigation(chatId);
-        if (!navigationStack || navigationStack.length === 0) {
-            await sendMessage("⚠️ No previous step to go back to.");
+    // Handle 'awaiting_managers_phone' step
+    if (userNavigation && userNavigation[userNavigation.length - 1]?.step === 'awaiting_managers_phone') {
+        const phoneNumber = text;
+        if (!/^\+?\d{7,15}$/.test(phoneNumber)) {
+            await sendMessage("❗ Invalid phone number. Please enter a valid one (e.g., +998901234567):");
             return;
         }
 
-        // Pop the last step to go back
-        const lastStep = navigationStack.pop();
-        await saveUserNavigation(chatId, navigationStack);  // Update the navigation stack in DB
-
-        // Handle back navigation based on the last step
-        if (lastStep.step === 'awaiting_managers_phone') {
-            await sendMessage("📱 Please enter the manager’s *phone number*:", {
-                parse_mode: 'Markdown',
-                reply_markup: {
-                    keyboard: [[{ text: '/cancel' }]],
-                    resize_keyboard: true,
-                    one_time_keyboard: true
-                }
-            });
-        } else if (lastStep.step === 'managers_list') {
-            await sendMessage("📋 Returning to Managers List...");
-            // Re-fetch and show Managers List
-            const result = await pool.query(`SELECT * FROM managers`);
-            const managers = result.rows;
-
-            if (managers.length === 0) {
-                await sendMessage("📭 No registered managers.");
-                return;
-            }
-
-            for (const manager of managers) {
-                const phone = manager.phone_number || 'Not provided';
-                const email = manager.jira_email || '❌ Not registered yet';
-                const telegramId = manager.telegram_chat_id || '❌ Not linked';
-
-                await sendMessage(
-                    `👤 *Phone:* ${phone}\n📧 *Jira Email:* ${email}\n💬 *Telegram ID:* ${telegramId}`,
-                    {
-                        parse_mode: 'Markdown',
-                        reply_markup: {
-                            inline_keyboard: [
-                                [
-                                    { text: '✏️ Edit', callback_data: `edit_user:${manager.id}` },
-                                    { text: '🗑 Delete', callback_data: `delete_user:${manager.id}` }
-                                ]
-                            ]
-                        }
-                    }
-                );
-            }
-
-        } else if (lastStep.step === 'projects_list') {
-            await sendMessage("📋 Returning to Projects List...");
-            // Optionally, you can re-show the Projects List here
-            const all = await getJiraProjects();
-            if (!Array.isArray(all) || all.length === 0) {
-                await sendMessage("⚠️ No projects found.");
-                return;
-            }
-
-            const page = 1;
-            const size = 10;
-            const totalPages = Math.ceil(all.length / size);
-            const subset = all.slice(0, size);
-
-            const messageText = [
-                `📋 *Jira Projects (${page}/${totalPages})*`,
-                ...subset.map((p, i) => `${i + 1}. ${p.name}`)
-            ].join('\n');
-
-            const keyboard = [];
-            for (let i = 0; i < subset.length; i += 5) {
-                keyboard.push(
-                    subset.slice(i, i + 5).map((project, j) => {
-                        const localIndex = i + j;
-                        const globalIndex = (page - 1) * size + localIndex;
-                        const emoji = emojiNumbers[localIndex] || `${localIndex + 1}`;
-                        return {
-                            text: emoji,
-                            callback_data: `project_detail:${globalIndex}`
-                        };
-                    })
-                );
-            }
-
-            if (totalPages > 1) {
-                keyboard.push([{ text: '➡️', callback_data: `project_page:${page + 1}` }]);
-            }
-
-            await sendMessage(messageText, {
-                parse_mode: 'Markdown',
-                reply_markup: { inline_keyboard: keyboard }
-            });
-
-        } else if (lastStep.step === 'notifications_list') {
-
-        } else {
-            // Default fallback message for unknown steps
-            await sendMessage("⚠️ Returning to the main menu.");
-            await sendMessage("👋 Welcome! This bot is connected to your Jira software.", await MainMenuKeyboard());
+        try {
+            await pool.query(`INSERT INTO managers (phone_number) VALUES ($1)`, [phoneNumber]);
+            await sendMessage("✅ Phone number has been saved to the database.", await MainMenuKeyboard());
+        } catch (err) {
+            console.error("DB save error:", err);
+            await sendMessage("❌ Error saving to the database.");
         }
+
+        // Move to the next step
+        const newNavigationStack = userNavigation.slice();
+        newNavigationStack.push({ step: 'completed', data: { phone: phoneNumber } });
+        await saveUserNavigation(chatId, navigationStack) //save the updated navigation
         return;
     }
 
+    // Handle 'Notifications List'
+    if (text === 'Notifications List') {
+        if (await checkIfManager(chatId)) {
+            try {
+                const componentsWithNotification = await pool.query("SELECT * FROM project_subscriptions WHERE chat_id = $1", [chatId]);
 
-    // if (text === '⬅️ Back') {
-    //     // Get the navigation stack and remove the last step (go back)
+                if (componentsWithNotification.rows.length === 0) {
+                    await sendMessage("📭 No notifications found.");
+                    return;
+                }
 
-    //     const navigationStack = await getUserNavigation(chatId);
-    //     if (!navigationStack || navigationStack.length === 0) {
-    //         await sendMessage("⚠️ No previous step to go back to.");
-    //         return;
-    //     }
+                const components = await getComponentsFromMainBoard(process.env.MB_ID);
 
-    //     navigationStack.pop();
-    //     await saveUserNavigation(chatId, navigationStack);
+                if (components.length === 0) {
+                    await sendMessage("📭 No components found for this project.");
+                    return;
+                }
 
-    //     const lastStep = navigationStack[navigationStack.length - 1] //to get previous step
+                const filteredComponents = await filterComponents(components, componentsWithNotification.rows);
+                projectCache[chatId] = filteredComponents
+                if (filteredComponents.length > 0) {
+                    const size = 10;
+                    const totalPages = Math.ceil(filteredComponents.length / size);
+                    let currentPage = 1;
 
-    //     if (lastStep.step === 'awaiting_managers_phone') {
-    //         await sendMessage("📱 Please enter the manager’s *phone number*:", {
-    //             parse_mode: 'Markdown',
-    //             reply_markup: {
-    //                 keyboard: [[{ text: '/cancel' }]],
-    //                 resize_keyboard: true,
-    //                 one_time_keyboard: true
-    //             }
-    //         });
-    //     } else if (lastStep.step === 'managers_list') {
+                    const navigationStack = await getUserNavigation(chatId) || [];
+                    navigationStack.push({ step: 'notifications_list', data: { page: currentPage } });
+                    await saveUserNavigation(chatId, navigationStack);
 
-    //     } else if (lastStep.step === 'projects_list') {
-
-    //     } else if (lastStep.step === '') {
-
-    //     }
-    //     return;
-    // }
-
-
+                    await showPage(chatId, currentPage, filteredComponents, totalPages);
+                } else {
+                    await sendMessage("❌ No components found for the specified project IDs.");
+                }
+            } catch (err) {
+                console.error("Error in fetching notifications list from DB", err);
+            }
+        } else {
+            sendMessage("🚫 You are not authorized to use this command.")
+        }
+        return;
+    }
 });
+
+
+// bot2.on('message', async (msg) => {
+//     const chatId = msg.chat.id;
+//     const text = msg.text?.trim();
+//     const contact = msg.contact;
+
+//     const sendMessage = (text, options = {}) => bot2.sendMessage(chatId, text, options);
+
+//     async function checkIfManager(chatId) {
+//         const result = await pool.query("SELECT 1 FROM managers WHERE telegram_chat_id = $1", [chatId]);
+//         return result.rowCount > 0;
+
+//     }
+//     // const MainMenuKeyboard = async () => {
+//     //     const admin = await isAdmin(chatId);
+//     //     return {
+//     //         reply_markup: {
+//     //             keyboard: admin
+//     //                 ? [
+//     //                     [{ text: 'Ask for access' }, { text: 'Projects List' }, { text: 'Notifications List' }],
+//     //                     [{ text: '📋 Managers List' }, { text: "Add manager" }],
+
+//     //                 ]
+//     //                 : [
+//     //                     [{ text: 'Ask for access' }, { text: 'Projects List' }, { text: 'Notifications List' }],
+
+//     //                 ],
+//     //             resize_keyboard: true,
+//     //             one_time_keyboard: false
+//     //         }
+//     //     };
+//     // };
+
+//     const MainMenuKeyboard = async (chatId) => {
+//         // Check if user is an admin and if they exist in the managers table
+//         const admin = await isAdmin(chatId);
+//         let inlineKeyboard = []
+//         const isManager = await checkIfManager(chatId);  // Function to check if chatId exists in the managers table
+//         if (admin) {
+//             inlineKeyboard = [
+//                 [{ text: 'Projects List' }, { text: 'Notifications List' }],
+//                 [{ text: '📋 Managers List' }, { text: "Add manager" }],
+//             ]
+//         } else if (isManager) {
+//             inlineKeyboard = [
+//                 [{ text: 'Projects List' }, { text: 'Notifications List' }]
+//             ]
+//         } else {
+//             inlineKeyboard = [
+//                 [{ text: 'Projects List' }, { text: 'Notifications List' }],
+//                 [{ text: 'Ask for access' }]
+
+//             ]
+//         }
+//         // Build the keyboard based on admin status and manager status
+//         return {
+//             reply_markup: {
+//                 keyboard: inlineKeyboard,
+//                 // keyboard: admin
+//                 //     ? [
+//                 //         [{ text: 'Projects List' }, { text: 'Notifications List' }],
+//                 //         [{ text: '📋 Managers List' }, { text: "Add manager" }],
+//                 //     ]
+//                 //     : [
+//                 //         [{ text: 'Projects List' }, { text: 'Notifications List' }],
+//                 //         !isManager ? [] : [{ text: 'Ask for access' }],  // Add "Ask for access" only if the user is not a manager
+//                 //     ],
+//                 resize_keyboard: true,
+//                 one_time_keyboard: false
+//             }
+//         };
+//     };
+
+//     const userNavigation = await getUserNavigation(chatId)
+
+//     if (text === "⬅️ Back") {
+//         if (!userNavigation || userNavigation.length === 0) {
+//             await sendMessage("⚠️ No previous step to go back to.");
+//             return;
+//         }
+
+//         const lastStep = userNavigation.pop();
+//         await saveUserNavigation(chatId, userNavigation)
+//         if (lastStep.step === 'projects_list') {
+//             const components = projectCache[chatId] || [];
+//             const page = lastStep.data.page || 1;  // Use last visited page number
+//             await showPage(chatId, page, components);
+//         } else if (lastStep.step === 'status_page') {
+//             const { componentId } = lastStep.data;
+//             const issues = await getIssuesByComponentId(componentId);
+//             await sendIssuesByStatus(chatId, issues);
+//         } else {
+//             await sendMessage("⚠️ Unknown step. Returning to main menu.");
+//             await sendMessage("👋 Welcome! This bot is connected to your Jira software.", await MainMenuKeyboard());
+//         }
+//         return;
+//     }
+
+//     // Cancel handler
+//     if (text === '/cancel') {
+//         await saveUserNavigation(chatId, [])
+//         await sendMessage("❌ Cancelled. Back to main menu.", await MainMenuKeyboard());
+//         return;
+//     }
+
+//     // Contact handler
+//     if (contact && contact.phone_number) {
+//         const phone = '+' + contact.phone_number;
+//         try {
+//             const result = await pool.query(
+//                 `UPDATE managers SET telegram_chat_id = $1 WHERE phone_number = $2`,
+//                 [chatId, phone]
+//             );
+
+//             if (result.rowCount === 0) {
+//                 await sendMessage(`⚠️ Your phone number is not recognized. Please ask an admin to register you.`, await MainMenuKeyboard());
+//             } else {
+//                 await sendMessage(`✅ Thank you! You’ve been granted access.`, await MainMenuKeyboard());
+//             }
+//         } catch (err) {
+//             console.error("❌ Error updating Telegram ID:", err);
+//             await sendMessage("❌ Failed to link your phone number. Please try again later.");
+//         }
+//         return;
+//     }
+
+//     // Start
+//     if (text === '/start') {
+
+//         await saveUserNavigation(chatId, navigationStack);
+//         await sendMessage("👋 Welcome! This bot is connected to your Jira software.", await MainMenuKeyboard());
+//         return;
+//     }
+
+//     // Add manager
+//     if (text === 'Add manager' || text === '/add_manager') {
+//         let navigationStack = await getUserNavigation(chatId) || [];
+//         console.log("navigationStack: ", navigationStack)
+//         if (!Array.isArray(navigationStack)) {
+//             console.error("Navigation stack is not an array, resetting to an empty array.");
+//             navigationStack = [];
+//         }
+//         navigationStack.push({ step: 'awaiting_managers_phone', data: {} });
+//         await saveUserNavigation(chatId, navigationStack);
+
+
+//         await sendMessage("📱 Please enter the manager’s *phone number*:", {
+//             parse_mode: 'Markdown',
+//             reply_markup: {
+//                 keyboard: [[{ text: '/cancel' }]],
+//                 resize_keyboard: true,
+//                 one_time_keyboard: true
+//             }
+//         });
+//         return;
+//     }
+
+
+//     // Handle 'awaiting_managers_phone' step
+//     if (userNavigation && userNavigation[userNavigation.length - 1]?.step === 'awaiting_managers_phone') {
+//         const phoneNumber = text;
+//         if (!/^\+?\d{7,15}$/.test(phoneNumber)) {
+//             await sendMessage("❗ Invalid phone number. Please enter a valid one (e.g., +998901234567):");
+//             return;
+//         }
+
+//         try {
+//             await pool.query(`INSERT INTO managers (phone_number) VALUES ($1)`, [phoneNumber]);
+//             await sendMessage("✅ Phone number has been saved to the database.", await MainMenuKeyboard());
+//         } catch (err) {
+//             console.error("DB save error:", err);
+//             await sendMessage("❌ Error saving to the database.");
+//         }
+
+//         // Move to the next step
+//         const newNavigationStack = userNavigation.slice();
+//         newNavigationStack.push({ step: 'completed', data: { phone: phoneNumber } });
+//         await saveUserNavigation(chatId, navigationStack) //save the updated navigation
+//         return;
+//     }
+
+//     // Managers list??
+//     if (text === '/managers_list' || text === '📋 Managers List') {
+//         const admin = await isAdmin(chatId);
+//         if (admin) {
+//             try {
+//                 const result = await pool.query(`SELECT * FROM managers`);
+//                 const managers = result.rows;
+
+//                 if (managers.length === 0) {
+//                     await sendMessage("📭 No registered managers.");
+//                     return;
+//                 }
+
+//                 for (const manager of managers) {
+//                     const phone = manager.phone_number || 'Not provided';
+//                     const email = manager.jira_email || '❌ Not registered yet';
+//                     const telegramId = manager.telegram_chat_id || '❌ Not linked';
+
+//                     await sendMessage(
+//                         `👤 *Phone:* ${phone}\n📧 *Jira Email:* ${email}\n💬 *Telegram ID:* ${telegramId}`,
+//                         {
+//                             parse_mode: 'Markdown',
+//                             reply_markup: {
+//                                 inline_keyboard: [
+//                                     [
+//                                         { text: '✏️ Edit', callback_data: `edit_user:${manager.id}` },
+//                                         { text: '🗑 Delete', callback_data: `delete_user:${manager.id}` }
+//                                     ]
+//                                 ]
+//                             }
+//                         }
+//                     );
+//                 }
+
+//             } catch (err) {
+//                 console.error("❌ Error fetching managers:", err);
+//                 await sendMessage("⚠️ Error retrieving managers from the database.");
+//             }
+//         } else {
+//             await sendMessage("🚫 You are not authorized to use this command.");
+//         }
+//         return;
+//     }
+
+
+//     // Ask for access??
+//     if (text === 'Ask for access') {
+
+//         // const navigationStack = await getUserNavigation(chatId) || []
+//         // if (!Array.isArray(navigationStack)) {
+//         //     console.error("Navigation stack is not an array, resetting to an empty array.");
+//         //     navigationStack = [];
+//         // }
+//         // navigationStack.push({ step: 'ask_for_access', data: {} })
+//         // await saveUserNavigation(chatId, navigationStack)
+
+//         await sendMessage('📲 To get access, please share your phone number:', {
+//             reply_markup: {
+//                 keyboard: [[{ text: '📤 Share phone number', request_contact: true }], [{ text: '/cancel' }]],
+//                 resize_keyboard: true,
+//                 one_time_keyboard: true
+//             }
+//         });
+//         return;
+//     }
+
+//     // Projects list
+//     if (text === 'Projects List') {
+//         console.log(await isAdmin(chatId))
+//         try {
+//             const components = await getComponentsFromMainBoard(process.env.MB_ID);
+//             if (components.length === 0) {
+//                 await sendMessage("📭 No components found for this project.");
+//                 return;
+//             }
+
+//             projectCache[chatId] = components
+
+
+//             const size = 10;
+//             const totalPages = Math.ceil(components.length / size);
+
+//             let currentPage = 1;
+
+//             const navigationStack = await getUserNavigation(chatId) || []
+//             navigationStack.push({ step: 'projects_list', data: { page: currentPage } }) //update the last stack
+//             await saveUserNavigation(chatId, navigationStack) //saving to the d
+
+//             await showPage(chatId, currentPage, components, totalPages);
+//         }
+//         catch (err) {
+//             console.error("Failed to load components from Main board", err);
+//             await sendMessage("❌ Failed to fetch projects from Jira");
+//         }
+//         return;
+//     }
+
+//     if (text === 'Notifications List') {
+//         try {
+//             const componentsWithNotification = await pool.query(
+//                 "SELECT * FROM project_subscriptions"
+//             );
+//             if (componentsWithNotification.length === 0) {
+//                 await sendMessage("📭 No Notifications list found.");
+//                 return;
+//             }
+
+//             console.log("notificationList: ", componentsWithNotification.rows)
+
+//             const components = await getComponentsFromMainBoard(process.env.MB_ID);
+//             if (components.length === 0) {
+//                 await sendMessage("📭 No components found for this project.");
+//                 return;
+//             }
+
+//             const filteredComponents = await filterComponents(components, componentsWithNotification.rows)
+//             if (filteredComponents.length > 0) {
+//                 projectCache[chatId] = filteredComponents
+//                 const size = 10;
+//                 const totalPages = Math.ceil(filteredComponents.length / size);
+//                 let currentPage = 1;
+
+//                 const navigationStack = await getUserNavigation(chatId) || []
+//                 navigationStack.push({ step: 'notificatoins_list', data: { page: currentPage } }) //update the last stack
+//                 await saveUserNavigation(chatId, navigationStack)
+//                 await showPage(chatId, currentPage, filteredComponents, totalPages);
+//             } else {
+//                 console.log("No components found for the specified project IDs.");
+//                 await sendMessage("❌ Failed to fetch Notifications list from DB");
+//             }
+
+//         }
+//         catch (err) {
+//             console.error("Error in fetching notifications list from db", err)
+//         }
+//     }
+// });
 
 bot2.on('callback_query', async (callback) => {
     const chatId = callback.message.chat.id;
     const data = callback.data;
 
     const sendMessage = (text, options = {}) => bot2.sendMessage(chatId, text, options);
+
+    await bot2.answerCallbackQuery(callback.id);
 
     if (data.startsWith('notifications_page:')) {
         const page = parseInt(data.split(':')[1], 10);
@@ -941,8 +934,6 @@ bot2.on('callback_query', async (callback) => {
             await sendMessage("❗ Manager not found.");
             return;
         }
-
-        // Store navigation stack and set to edit email step
         const navigationStack = await getUserNavigation(chatId) || [];
         navigationStack.push({ step: 'edit_email', data: { id: userId, phone: user.rows[0].phone_number, email: user.rows[0].jira_email } });
         await saveUserNavigation(chatId, navigationStack); // Save stack in DB
@@ -951,633 +942,217 @@ bot2.on('callback_query', async (callback) => {
         return;
     }
 
-    // Handle select_board (fetch boards for project)
-    if (data.startsWith('select_board:')) {
-        const boardId = parseInt(data.split(':')[1]);
-        const boardState = boardSelectionCache[chatId];
+    if (data.startsWith('projects_page:')) {
+        const page = parseInt(data.split(':')[1], 10);
 
-        if (!boardState || !boardState.boards.find(b => b.id === boardId)) {
-            return await sendMessage("⚠️ Board not found or expired.");
-        }
+        const components = projectCache[chatId] || [];
 
-        const selectedBoard = boardState.boards.find(b => b.id === boardId);
-        const project = boardState.project;
-        const projectPage = Math.floor(boardState.projectIndex / 10) + 1;
+        const totalPages = Math.ceil(components.length / 10);
 
-        try {
-            const issueData = await getIssuesByBoardId(boardId);
-            const issues = issueData.issues;
-
-            if (!issues.length) {
-                await pushAndSend(bot2, chatId, "📭 No issues found in this board.", {
-                    reply_markup: {
-                        inline_keyboard: [[{ text: '⬅️ Back', callback_data: `project_detail:${boardState.projectIndex}` }]]
-                    }
-                });
-                return;
-            }
-
-            // Group issues by status
-            const groupedByStatus = issues.reduce((acc, issue) => {
-                const status = issue.fields.status?.name || 'Unknown';
-                const summary = issue.fields.summary || 'No summary';
-                const priority = issue.fields.priority?.name || 'None';
-                if (!acc[status]) acc[status] = [];
-                acc[status].push(`🔹 *${summary}* (${priority})`);
-                return acc;
-            }, {});
-
-            const allStatusNames = Object.keys(groupedByStatus);
-            const sortedStatuses = await fetchAndSortStatuses(project.id);
-
-            const statusKeys = sortedStatuses
-                .map(status => status.name)
-                .filter(name => allStatusNames.includes(name));
-
-            if (statusKeys.length === 0) {
-                await sendMessage("📭 No issues found with known statuses.");
-                return;
-            }
-
-            statusLookup[chatId] = {
-                statuses: statusKeys,
-                grouped: groupedByStatus,
-                projectPage,
-                projectIndex: boardState.projectIndex,
-                boardId: selectedBoard.id,
-                boardName: selectedBoard.name,
-                projectId: project.id
-            };
-
-            let message = `🗂 *Issues grouped by Status in "${selectedBoard.name}"*\n\n`;
-            statusKeys.forEach((status, idx) => {
-                const count = groupedByStatus[status].length;
-                message += `*${idx + 1}. ${status}* — ${count} issues\n`;
-            });
-
-            const inlineButtons = statusKeys.map((_, i) => ({
-                text: `${i + 1}`,
-                callback_data: `status_detail:${i}`
-            }));
-
-            const inlineKeyboard = [];
-            for (let i = 0; i < inlineButtons.length; i += 4) {
-                inlineKeyboard.push(inlineButtons.slice(i, i + 4));
-            }
-
-            inlineKeyboard.push([{ text: '⬅️ Back', callback_data: `project_detail:${boardState.projectIndex}` }]);
-
-            // Save the navigation stack for the board selection step
-            const navigationStack = await getUserNavigation(chatId) || [];
-            navigationStack.push({ step: 'select_board', data: { boardId, projectId: project.id } });
-            await saveUserNavigation(chatId, navigationStack); // Save stack in DB
-
-            await pushAndSend(bot2, chatId, message, {
-                parse_mode: 'Markdown',
-                reply_markup: { inline_keyboard: inlineKeyboard }
-            });
-
-        } catch (e) {
-            console.error("Error loading issues for selected board:", e);
-            await sendMessage("❌ Failed to load issues.");
-        }
-
-        return;
-    }
-
-    if (data.startsWith('toggle_notify:')) {
-        const projectId = parseInt(data.split(':')[1], 10);
-
-        if (isNaN(projectId)) {
-            await sendMessage("❌ Invalid project ID.");
+        if (page < 1 || page > totalPages) {
+            await sendMessage("❗ Invalid page.");
             return;
         }
 
+        await showPage(chatId, page, components, totalPages);
+    }
+
+    if (data.startsWith('toggle_notify:')) {
+        const componentId = parseInt(data.split(':')[1], 10);
+        if (isNaN(componentId)) {
+            await sendMessage("❌ Invalid project ID.");
+            return;
+        }
+        const { message, messageId } = messageIdCashe[chatId]
+        let inlineKeyboard = messageIdCashe[chatId].inlineKeyboard
+        console.log("inline keyboard: ", inlineKeyboard)
+
+        if (!messageId) {
+            console.error("No message ID found, unable to edit message");
+            return;
+        }
+
+        let updatedButtonText = ''
         try {
-            // Check if the user is already subscribed to the project notifications
             const existing = await pool.query(
-                `SELECT 1 FROM project_subscriptions WHERE chat_id = $1 AND project_id = $2`,
-                [chatId, projectId]
+                `SELECT * FROM project_subscriptions WHERE chat_id = $1 AND project_id = $2`,
+                [chatId, componentId]
             );
 
             if (existing.rowCount > 0) {
-                // Unsubscribe user by deleting the subscription
+
                 await pool.query(
                     `DELETE FROM project_subscriptions WHERE chat_id = $1 AND project_id = $2`,
-                    [chatId, projectId]
+                    [chatId, componentId]
                 );
-                await sendMessage(`🔕 Notifications *disabled* for project ID ${projectId}.`, { parse_mode: 'Markdown' });
+
+
+                updatedButtonText = '🔔 Turn On Notifications'
             } else {
-                // Subscribe user by adding a new record
+
                 await pool.query(
                     `INSERT INTO project_subscriptions (chat_id, project_id) VALUES ($1, $2)`,
-                    [chatId, projectId]
+                    [chatId, componentId]
                 );
-                await sendMessage(`🔔 Notifications *enabled* for project ID ${projectId}.`, { parse_mode: 'Markdown' });
+
+                updatedButtonText = '🔕 Turn Off Notifications';
             }
+
+
         } catch (err) {
             console.error("Database error:", err);
             await sendMessage("❌ Failed to update notifications. Please try again later.");
         }
-
-        return;
-    }
-
-    if (data.startsWith('project_detail:')) {
-        const idx = parseInt(data.split(':')[1], 10);
-        const all = projectCache[chatId] || [];
-
-        // Ensure the index is valid
-        if (isNaN(idx) || idx < 0 || idx >= all.length) {
-            await sendMessageBot2(chatId, "⚠️ Project not found or expired.");
-            return;
-        }
-
-        const project = all[idx];
-        const currentProjectPage = Math.floor(idx / 10) + 1;
-
-        // Check if the user is subscribed to notifications for this project
-        const isSubscribed = await pool.query(
-            "SELECT 1 FROM project_subscriptions WHERE chat_id = $1 AND project_id = $2",
-            [chatId, project.id]
-        );
-
-        try {
-            // Get the boards for the selected project
-            const boards = await getBoardsByProject(project.id);
-
-            if (!boards.values?.length) {
-                await sendMessageBot2(chatId, "⚠️ No boards found for this project.");
-                return;
-            }
-
-            // Store boards temporarily for the user
-            boardSelectionCache[chatId] = {
-                project,
-                boards: boards.values,
-                projectIndex: idx
-            };
-
-            // Construct the inline keyboard for the boards
-            const keyboard = boards.values.map(board => {
-                return [
-                    {
-                        text: board.name,
-                        callback_data: `select_board:${board.id}`
-                    }
-                ];
-            });
-
-            // Add a notification toggle button
-            keyboard.push([{
-                text: isSubscribed.rowCount > 0 ? '🔕 Turn Off Notifications' : '🔔 Turn On Notifications',
-                callback_data: `toggle_notify:${project.id}`
-            }]);
-
-            // Add a back button that returns to the previous project page
-            keyboard.push([{ text: '⬅️ Back', callback_data: `project_page:${currentProjectPage}` }]);
-
-            // Prevent duplicating the board selection in history
-            const lastView = navigationStack[chatId]?.at(-1);
-            if (lastView?.text?.startsWith('🛠 *Select a board')) {
-                navigationStack[chatId].pop(); // Remove the last view if it's the board selector
-            }
-
-            // Save the current project and board selector view to the navigation stack
-            const lastMsg = navigationStack[chatId]?.at(-1);
-            if (!lastMsg?.text?.startsWith(`🛠 *Select a board to view issues for "${project.name}"*`)) {
-                await pushAndSend(bot2, chatId, `🛠 *Select a board to view issues for "${project.name}"*:`, {
-                    parse_mode: 'Markdown',
-                    reply_markup: {
-                        inline_keyboard: keyboard
-                    }
-                });
-            }
-
-        } catch (e) {
-            console.error('Error fetching boards:', e);
-            await sendMessageBot2(chatId, "❌ Failed to load boards.");
-        }
-
-        return;
-    }
-
-    if (data.startsWith('notification_detail:')) {
-        const idx = parseInt(data.split(':')[1], 10);
-        const all = projectCache[chatId] || [];
-
-        // Ensure the index is valid
-        if (isNaN(idx) || idx < 0 || idx >= all.length) {
-            await sendMessageBot2(chatId, "⚠️ Project not found or expired.");
-            return;
-        }
-
-        const project = all[idx];
-        const currentProjectPage = Math.floor(idx / 10) + 1;
-
-        // Check if the user is subscribed to notifications for this project
-        const isSubscribed = await pool.query(
-            "SELECT 1 FROM project_subscriptions WHERE chat_id = $1 AND project_id = $2",
-            [chatId, project.id]
-        );
-
-        try {
-            // Get the boards for the selected project
-            const boards = await getBoardsByProject(project.id);
-
-            if (!boards.values?.length) {
-                await sendMessageBot2(chatId, "⚠️ No boards found for this project.");
-                return;
-            }
-
-            // Store boards temporarily for the user
-            boardSelectionCache[chatId] = {
-                project,
-                boards: boards.values,
-                projectIndex: idx
-            };
-
-            // Construct the inline keyboard for the boards
-            const keyboard = boards.values.map(board => {
-                return [
-                    {
-                        text: board.name,
-                        callback_data: `select_board:${board.id}`
-                    }
-                ];
-            });
-
-            // Add a notification toggle button
-            keyboard.push([{
-                text: isSubscribed.rowCount > 0 ? '🔕 Turn Off Notifications' : '🔔 Turn On Notifications',
-                callback_data: `toggle_notify:${project.id}`
-            }]);
-
-            // Add a back button that returns to the previous project page
-            keyboard.push([{ text: '⬅️ Back', callback_data: `project_page:${currentProjectPage}` }]);
-
-            // Prevent duplicating the board selection in history
-            const lastView = navigationStack[chatId]?.at(-1);
-            if (lastView?.text?.startsWith('🛠 *Select a board')) {
-                navigationStack[chatId].pop(); // Remove the last view if it's the board selector
-            }
-
-            // Save the current project and board selector view to the navigation stack
-            const lastMsg = navigationStack[chatId]?.at(-1);
-            if (!lastMsg?.text?.startsWith(`🛠 *Select a board to view issues for "${project.name}"*`)) {
-                await pushAndSend(bot2, chatId, `🛠 *Select a board to view issues for "${project.name}"*:`, {
-                    parse_mode: 'Markdown',
-                    reply_markup: {
-                        inline_keyboard: keyboard
-                    }
-                });
-            }
-
-        } catch (e) {
-            console.error('Error fetching boards:', e);
-            await sendMessageBot2(chatId, "❌ Failed to load boards.");
-        }
-
-        return;
-    }
-
-
-    // Handle status_detail
-    // if (data.startsWith('status_detail:')) {
-    //     const [_, statusIndexStr, pageStr] = data.split(':');
-    //     const statusIndex = parseInt(statusIndexStr, 10);
-    //     const page = parseInt(pageStr, 10) || 1; // Default to page 1 if no page is specified
-    //     const state = statusLookup[chatId];
-
-    //     if (!state) return await sendMessage("⚠️ No status info available.");
-
-    //     const statusName = state.statuses[statusIndex];
-    //     const issues = state.grouped[statusName];
-    //     const pageSize = 10;
-    //     const totalPages = Math.ceil(issues.length / pageSize);
-    //     const start = (page - 1) * pageSize;
-    //     const currentIssues = issues.slice(start, start + pageSize);
-
-    //     let message = `🔎 *Details for Status: ${statusName}*\n📄 Page ${page} of ${totalPages} | Total: ${issues.length} issues\n\n`;
-    //     message += currentIssues.map((issue, i) => `${start + i + 1}. ${issue}`).join('\n');
-
-    //     // Navigation buttons
-    //     const navButtons = [];
-    //     if (page < totalPages) navButtons.push({ text: '➡️ Next', callback_data: `status_page:${statusIndex}:${page + 1}` });
-    //     if (page > 1) navButtons.push({ text: '⬅️ Prev', callback_data: `status_page:${statusIndex}:${page - 1}` });
-    //     navButtons.push({ text: '⬅️ Back', callback_data: 'go_back' });
-
-    //     // Ensure last view in navigation stack is correct before updating
-    //     const lastView = navigationStack[chatId]?.at(-1);
-    //     if (lastView?.text?.startsWith('🔎 *Details for Status:')) {
-    //         await bot2.deleteMessage(chatId, lastView.message_id).catch(() => { });
-    //     }
-
-    //     // Save the current view and send new message
-    //     await pushAndSend(bot2, chatId, message, {
-    //         parse_mode: 'Markdown',
-    //         reply_markup: { inline_keyboard: [navButtons] }
-    //     });
-
-    //     return;
-    // }
-
-    if (data.startsWith('status_detail:')) {
-        const [_, statusIndexStr, pageStr] = data.split(':');
-        const statusIndex = parseInt(statusIndexStr, 10);
-        const page = parseInt(pageStr, 10) || 1; // Default to page 1 if no page is specified
-        const state = statusLookup[chatId];
-
-        if (!state) return await sendMessage("⚠️ No status info available.");
-
-        const statusName = state.statuses[statusIndex];
-        const issues = state.grouped[statusName];
-        const pageSize = 10;
-        const totalPages = Math.ceil(issues.length / pageSize);
-        const start = (page - 1) * pageSize;
-        const currentIssues = issues.slice(start, start + pageSize);
-
-        let message = `🔎 *Details for Status: ${statusName}*\n📄 Page ${page} of ${totalPages} | Total: ${issues.length} issues\n\n`;
-        message += currentIssues.map((issue, i) => `${start + i + 1}. ${issue}`).join('\n');
-
-        // Navigation buttons
-        const navButtons = [];
-        if (page < totalPages) navButtons.push({ text: '➡️ Next', callback_data: `status_page:${statusIndex}:${page + 1}` });
-        if (page > 1) navButtons.push({ text: '⬅️ Prev', callback_data: `status_page:${statusIndex}:${page - 1}` });
-
-        // Change the back button to select the board again
-        navButtons.push({
-            text: '⬅️ Back',
-            callback_data: `select_board:${state.boardId}` // Instead of 'go_back', now it references 'select_board'
-        });
-
-        // Ensure last view in navigation stack is correct before updating
-        const lastView = navigationStack[chatId]?.at(-1);
-        if (lastView?.text?.startsWith('🔎 *Details for Status:')) {
-            await bot2.deleteMessage(chatId, lastView.message_id).catch(() => { });
-        }
-
-        // Save the current view and send new message
-        await pushAndSend(bot2, chatId, message, {
-            parse_mode: 'Markdown',
-            reply_markup: { inline_keyboard: [navButtons] }
-        });
-
-        return;
-    }
-
-
-    // Handle status_page
-    if (data.startsWith('status_page:')) {
-        const [_, statusIndexStr, pageStr] = data.split(':');
-        const statusIndex = parseInt(statusIndexStr, 10);
-        const page = parseInt(pageStr, 10);
-        const state = statusLookup[chatId];
-
-        if (!state || isNaN(page)) {
-            return await sendMessage("⚠️ Invalid page number.");
-        }
-
-        const statusName = state.statuses[statusIndex];
-        const issues = state.grouped[statusName];
-        const pageSize = 10;
-        const totalPages = Math.ceil(issues.length / pageSize);
-        const start = (page - 1) * pageSize;
-        const currentIssues = issues.slice(start, start + pageSize);
-
-        let message = `🔎 *Details for Status: ${statusName}*\n📄 Page ${page} of ${totalPages} | Total: ${issues.length} issues\n\n`;
-        message += currentIssues.map((issue, i) => `${start + i + 1}. ${issue}`).join('\n');
-
-        const navButtons = [];
-
-        // Add previous page button if we're not on the first page
-        if (page > 1) navButtons.push({ text: '⬅️ Prev', callback_data: `status_page:${statusIndex}:${page - 1}` });
-
-        // Add next page button if there are more pages
-        if (page < totalPages) navButtons.push({ text: '➡️ Next', callback_data: `status_page:${statusIndex}:${page + 1}` });
-
-        // Add back button
-        navButtons.push({ text: '⬅️ Back', callback_data: 'go_back' });
-
-        // Handle the back button logic
-        const lastView = navigationStack[chatId]?.at(-1);
-        if (lastView?.text?.startsWith('🔎 *Details for Status:')) {
-            await bot2.deleteMessage(chatId, lastView.message_id).catch(() => { });
-        }
-
-        // Save the current status page to the navigation stack
-        await pushAndSend(bot2, chatId, message, {
-            parse_mode: 'Markdown',
-            reply_markup: { inline_keyboard: [navButtons] }
-        });
-
-        return;
-    }
-
-    // Handle project_page
-    if (data.startsWith('project_page:')) {
-        const page = parseInt(data.split(':')[1], 10);
-        const all = projectCache[chatId] || [];
-        const total = all.length;
-        const size = 10;
-        const pages = Math.ceil(total / size);
-
-        if (isNaN(page) || page < 1 || page > pages) return;
-
-        const subset = all.slice((page - 1) * size, page * size);
-        const text = [`📋 *Jira Projects (${page}/${pages})*`, ...subset.map((p, i) => `${i + 1}. ${p.name}`)].join('\n');
-
-        const keyboard = [];
-        for (let i = 0; i < subset.length; i += 5) {
-            keyboard.push(
-                subset.slice(i, i + 5).map((project, j) => {
-                    const localIndex = i + j;
-                    const globalIndex = (page - 1) * size + localIndex;
-                    const emoji = emojiNumbers[localIndex] || `${localIndex + 1}`;
-                    return {
-                        text: emoji,
-                        callback_data: `project_detail:${globalIndex}`
-                    };
-                })
-            );
-        }
-
-        // Add navigation buttons (prev/next)
-        keyboard.push([
-            ...(page > 1 ? [{ text: '⬅️ Prev', callback_data: `project_page:${page - 1}` }] : []),
-            ...(page < pages ? [{ text: '➡️ Next', callback_data: `project_page:${page + 1}` }] : [])
-        ]);
-
-        // Deleting the old message to ensure a clean interface
-        const lastView = navigationStack[chatId]?.at(-1);
-        if (lastView?.text?.startsWith('📋 *Jira Projects')) {
-            await bot2.deleteMessage(chatId, lastView.message_id).catch(() => { });
-        }
-
-        // Save this page view to the navigation stack
-        await pushAndSend(bot2, chatId, text, {
-            parse_mode: 'Markdown',
-            reply_markup: { inline_keyboard: keyboard }
-        });
-
-        return;
-    }
-
-    // Handle go_back (back button)
-    if (data === 'go_back') {
-        const state = statusLookup[chatId];
-        const history = navigationStack[chatId];
-        console.log(history);
-
-        if (!history || history.length < 2) {
-            await bot2.deleteMessage(chatId, callback.message.message_id).catch(() => { });
-            await sendMessage("⚠️ Nothing to go back to.");
-            return;
-        }
-
-        // Remove the current message and get the previous one
-        const current = history.pop();
-        const previous = history.pop();
-
-        // Case 1: Go back to grouped statuses (from 🔎 status_detail or page)
-        if (current.text.startsWith('🔎 *Details for Status:') && state) {
-            let message = `🗂 *Issues grouped by Status in "${state.boardName || 'all boards'}"*\n\n`;
-
-            // Group issues by status
-            state.statuses.forEach((status, idx) => {
-                const count = state.grouped[status].length;
-                message += `*${idx + 1}. ${status}* — ${count} issues\n`;
-            });
-
-            const inlineButtons = state.statuses.map((_, i) => ({
-                text: `${i + 1}`,
-                callback_data: `status_detail:${i}`
-            }));
-
-            const inlineKeyboard = [];
-            for (let i = 0; i < inlineButtons.length; i += 4) {
-                inlineKeyboard.push(inlineButtons.slice(i, i + 4));
-            }
-            inlineKeyboard.push([{ text: '⬅️ Back', callback_data: `back_to_board_selector:${state.projectIndex}` }]);
-
-            // Pop the last two messages from history (grouped status and status detail)
-            history.pop(); // remove current status detail
-            history.pop(); // remove grouped status view (to prevent duplication)
-
-            // Clean up and send the grouped status message
-            await bot2.deleteMessage(chatId, callback.message.message_id).catch(() => { });
-            await pushAndSend(bot2, chatId, message, {
-                parse_mode: 'Markdown',
-                reply_markup: { inline_keyboard: inlineKeyboard }
-            });
-            return;
-        }
-
-        // Case 2: Go back to previous message (default fallback)
-        await bot2.deleteMessage(chatId, callback.message.message_id).catch(() => { });
-        await bot2.sendMessage(chatId, previous.text, {
-            parse_mode: 'Markdown',
-            reply_markup: previous.reply_markup
-        });
-
-        // Do not re-push old message again to prevent looping.
-        return;
-    }
-
-
-    // Handle back_to_board_selector
-
-    if (data.startsWith('back_to_board_selector:')) {
-        const idx = parseInt(data.split(':')[1], 10);
-        const all = projectCache[chatId] || [];
-        console.log(idx);
-
-        // Ensure project exists
-        if (!all[idx]) {
-            await sendMessage("⚠️ Project not found or expired.");
-            return;
-        }
-
-        const project = all[idx];
-        let boards = [];
-        try {
-            boards = await getBoardsByProject(project.id);
-        } catch (err) {
-            console.error("Error fetching boards:", err);
-            await sendMessage("❌ Failed to load boards.");
-            return;
-        }
-
-        // If no boards found, inform the user
-        if (!boards.values?.length) {
-            await sendMessage("⚠️ No boards found for this project.");
-            return;
-        }
-
-        // Store boards temporarily for user navigation
-        boardSelectionCache[chatId] = {
-            project,
-            boards: boards.values,
-            projectIndex: idx
-        };
-
-        // Prepare the inline keyboard
-        const keyboard = boards.values.map(board => [{
-            text: board.name,
-            callback_data: `select_board:${board.id}`
-        }]);
-
-        // Add back button to go back to the project detail page
-        keyboard.push([{ text: '⬅️ Back', callback_data: `project_detail:${idx}` }]);
-
-        // Get the last message from the navigation stack
-        const lastMsg = navigationStack[chatId]?.at(-1);  // Get the second-to-last message
-        console.log(lastMsg)
-
-        // Check if the last message was the status page (we need to return to project detail)
-        if (lastMsg?.text?.startsWith('🔎 *Details for Status:')) {
-            // The user is currently on the status page, so we need to go back to the project detail
-            await sendMessage("🔙 Returning to project details...");
-
-            // Go back to the project detail page, skipping the board selection page
-            await pushAndSend(bot2, chatId, `📁 *${project.name}*`, {
-                parse_mode: 'Markdown',
-                reply_markup: {
-                    inline_keyboard: [[
-                        { text: '🛠 View Boards', callback_data: `back_to_board_selector:${idx}` },
-                        { text: '🔔 Notifications', callback_data: `toggle_notify:${project.id}` }
-                    ]]
+        inlineKeyboard.forEach(row => {
+            row.forEach(button => {
+                if (button.callback_data && button.callback_data.startsWith('toggle_notify')) {
+                    button.text = updatedButtonText;  // Update the button text
                 }
             });
+        });
+        console.log("Updated inline keyboar: ", inlineKeyboard)
 
+        await editUserMessage(message, inlineKeyboard, chatId, messageId)
+
+    }
+
+    if (data.startsWith('component_detail:')) {
+        const componentIndex = parseInt(data.split(':')[1], 10);
+        console.log("ComponenIndex: ", componentIndex)
+
+        const components = projectCache[chatId] || [];
+        // console.log("components: ", components)
+        const component = components[componentIndex];
+        console.log("component: ", component)
+        componentNameCashe[chatId] = component.name
+        const componentId = component.id
+        const navigationStack = await getUserNavigation(chatId)
+        navigationStack.push({ step: 'component_detail', data: { componentId, component, componentIndex, components } });
+        await saveUserNavigation(chatId, navigationStack);
+
+        const issues = await getIssuesByComponentId(componentId)
+        issueCashe[chatId] = { issues, componentId }
+
+        const groupedStatuses = await groupIssuesByStatus(issues)
+        await sendPaginatedStatusNames(groupedStatuses, chatId, 1, componentNameCashe[chatId], componentId, componentIndex)
+    }
+
+    if (data.startsWith('status_')) {
+        const statusName = data.split('_')[1];
+        const allIssues = issueCashe[chatId].issues
+
+        if (!allIssues || allIssues.length === 0) {
+            await sendMessage(chatId, "No issues found for this project.");
             return;
         }
 
-        // If the last message is the board selection message, skip sending it again
-        if (lastMsg?.text?.startsWith(`🛠 *Select a board to view issues for "${project.name}"*`)) {
-            // Skip sending the board selection message again if it's already the last message in the stack
+        const navigationStack = await getUserNavigation(chatId)
+        navigationStack.push({ step: 'issue_list', data: { status: statusName, allIssues: allIssues } });
+        await saveUserNavigation(chatId, navigationStack)
+
+        const groupedStatuses = await groupIssuesByStatus(allIssues);
+
+        if (groupedStatuses[statusName]) {
+            await sendIssuesForStatus(statusName, chatId, groupedStatuses);
+        } else {
+            await sendMessage(chatId, `No issues found for the selected status: ${statusName}`);
+        }
+    }
+
+    if (data.startsWith('next_status_page:')) {
+        const allIssues = issueCashe[chatId]
+
+        if (!allIssues || allIssues.length === 0) {
+            await sendMessage(chatId, "No issues found for this project.");
+            return;
+        }
+        const groupedStatuses = await groupIssuesByStatus(allIssues);
+        const page = parseInt(data.split(':')[1], 10);
+        await sendPaginatedStatusNames(groupedStatuses, chatId, page, componentNameCashe[chatId]);
+    }
+
+    if (data.startsWith('prev_status_page:')) {
+        const allIssues = issueCashe[chatId]
+
+        if (!allIssues || allIssues.length === 0) {
+            await sendMessage("No issues found for this project.", chatId);
+            return;
+        }
+        const groupedStatuses = await groupIssuesByStatus(allIssues);
+        const page = parseInt(data.split(':')[1], 10);
+        await sendPaginatedStatusNames(groupedStatuses, chatId, page, componentNameCashe[chatId]);
+    }
+
+    if (data === 'back') {
+        const navigationStack = await getUserNavigation(chatId) || []
+        if (!navigationStack || navigationStack.length === 0) {
+            await sendMessage("⚠️ No previous step to go back to.");
             return;
         }
 
-        // Check if the last message was the project detail page and prevent resending it
-        if (lastMsg?.text?.startsWith(`📁 *${project.name}*`)) {
-            // Delete the project detail message to avoid duplication
-            const lastMessageId = lastMsg?.message_id;
-            if (lastMessageId) {
-                await bot2.deleteMessage(chatId, lastMessageId).catch(() => { });
+        const lastStep = navigationStack.pop();
+        await saveUserNavigation(chatId, navigationStack)
+        if (lastStep.step === 'issue_list') {
+            console.log('Navigating back from issue list:', lastStep);
+
+            const { status, allIssues } = lastStep.data;
+
+            if (!allIssues || allIssues.length === 0) {
+                await sendMessage(chatId, "No issues found for this project.");
+                return;
+            }
+
+            const componentName = componentNameCashe[chatId]
+
+            const componentId = issueCashe[chatId].componentId
+
+
+            const groupedStatuses = await groupIssuesByStatus(allIssues);
+
+            if (groupedStatuses[status]) {
+                await sendPaginatedStatusNames(groupedStatuses, chatId, 1, componentName, componentId);  // Send the issues for the selected status
+            } else {
+                await sendMessage(chatId, `No issues found for the selected status: ${status}`);  // No issues for this status
+            }
+        } else if (lastStep.step === 'component_detail') {
+            const { componentIndex, components } = lastStep.data;
+
+            const size = 10;
+            const totalPages = Math.ceil(components.length / size);
+            console.log("Total pages: ", totalPages)
+            let currentPage = Math.floor(componentIndex / size) + 1; // 
+
+
+            console.log("current page: ", currentPage)
+
+            await showPage(chatId, currentPage, components, totalPages);
+        } else if (lastStep.step === 'status_page') {
+            try {
+                const components = await getComponentsFromMainBoard(process.env.MB_ID);
+                if (components.length === 0) {
+                    await sendMessage(chatId, "📭 No components found for this project.");
+                    return;
+                }
+
+                projectCache[chatId] = components;
+                const size = 10;
+                const totalPages = Math.ceil(components.length / size);
+
+                let currentPage = lastStep.data.page; // Use the last saved page number
+
+                await showPage(chatId, currentPage, components, totalPages);
+            }
+            catch (err) {
+                console.error("Failed to load components from Main board", err);
+                await sendMessage("❌ Failed to fetch projects from Jira");
             }
         }
 
-        // Save the navigation stack and send the new message
-        await pushAndSend(bot2, chatId, `🛠 *Select a board to view issues for "${project.name}"*:`, {
-            parse_mode: 'Markdown',
-            reply_markup: { inline_keyboard: keyboard }
-        });
-
+        else {
+            await sendMessage("⚠️ Unknown step. Returning to main menu.");
+        }
         return;
     }
-
-
 
 
     await bot2.answerCallbackQuery(callback.id);
